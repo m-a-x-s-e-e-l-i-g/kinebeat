@@ -88,6 +88,20 @@ QPushButton#secondaryButton, QPushButton#quietButton {
     background: #171917;
     border: 1px solid #4a4e49;
 }
+QPushButton#transportButton {
+    min-height: 28px;
+    color: #10110f;
+    background: #dfe2db;
+    border: 1px solid #dfe2db;
+    font-size: 10px;
+    letter-spacing: 0.8px;
+}
+QPushButton#transportButton:hover { background: #f2f4ee; border-color: #f2f4ee; }
+QPushButton#transportButton:disabled {
+    color: #555a54;
+    background: #171917;
+    border-color: #292c29;
+}
 QPushButton#secondaryButton:hover, QPushButton#quietButton:hover {
     color: #f0f2ed;
     background: #202320;

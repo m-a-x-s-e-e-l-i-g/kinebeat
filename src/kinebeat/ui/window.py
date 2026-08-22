@@ -5,7 +5,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QStandardPaths, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QStandardPaths, Qt, QThread, QUrl, Signal, Slot
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -21,12 +23,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kinebeat.domain import EventKind, MusicalEvent, MusicAnalysis, SongMetadata, StemArtifact
+from kinebeat.domain import (
+    EventKind,
+    MusicalEvent,
+    MusicAnalysis,
+    ProjectFormatError,
+    ProjectState,
+    SongMetadata,
+    StemArtifact,
+    load_project,
+    save_project,
+)
 from kinebeat.processing import MusicAnalysisService, probe_song
 from kinebeat.ui.tasks import TaskWorker
 from kinebeat.ui.timeline import MusicTimeline
 
 AUDIO_FILTER = "Music files (*.wav *.mp3 *.flac *.m4a *.aac *.ogg *.opus);;All files (*.*)"
+VIDEO_FILTER = "Video files (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mts *.m2ts);;All files (*.*)"
+PROJECT_FILTER = "Kinebeat projects (*.kinebeat);;All files (*.*)"
 
 
 class MusicDropZone(QFrame):
@@ -80,9 +94,17 @@ class KinebeatWindow(QMainWindow):
         self.setMinimumSize(1120, 720)
         self._song: SongMetadata | None = None
         self._analysis: MusicAnalysis | None = None
+        self._video_paths: tuple[Path, ...] = ()
+        self._project_path: Path | None = None
+        self._dirty = False
+        self._loading_project = False
+        self._pending_playhead_seconds = 0.0
         self._task_thread: QThread | None = None
         self._task_worker: TaskWorker | None = None
         self._build_ui()
+        self._setup_playback()
+        self._setup_shortcuts()
+        self._update_window_title()
         self._sync_state()
 
     def _build_ui(self) -> None:
@@ -120,6 +142,14 @@ class KinebeatWindow(QMainWindow):
         layout.addWidget(wordmark)
         layout.addWidget(strapline)
         layout.addStretch()
+        self.open_project_button = QPushButton("Open project")
+        self.open_project_button.setObjectName("quietButton")
+        self.open_project_button.clicked.connect(self._open_project)
+        self.save_project_button = QPushButton("Save project")
+        self.save_project_button.setObjectName("quietButton")
+        self.save_project_button.clicked.connect(self._save_project)
+        layout.addWidget(self.open_project_button)
+        layout.addWidget(self.save_project_button)
         layout.addWidget(privacy)
         return header
 
@@ -162,12 +192,13 @@ class KinebeatWindow(QMainWindow):
         footage_layout.setContentsMargins(0, 0, 0, 18)
         footage_layout.setSpacing(10)
         footage_layout.addLayout(self._step_heading("02", "Footage"))
-        footage_copy = QLabel("Import clips after the musical structure is ready.")
-        footage_copy.setObjectName("bodyMuted")
-        footage_copy.setWordWrap(True)
+        self.footage_copy = QLabel("Import clips after the musical structure is ready.")
+        self.footage_copy.setObjectName("bodyMuted")
+        self.footage_copy.setWordWrap(True)
         self.footage_button = QPushButton("Import video clips")
         self.footage_button.setObjectName("secondaryButton")
-        footage_layout.addWidget(footage_copy)
+        self.footage_button.clicked.connect(self._choose_video_clips)
+        footage_layout.addWidget(self.footage_copy)
         footage_layout.addWidget(self.footage_button)
         layout.addWidget(music_section)
         layout.addWidget(footage_section)
@@ -219,12 +250,23 @@ class KinebeatWindow(QMainWindow):
         timeline_header_layout.setContentsMargins(14, 0, 14, 0)
         timeline_title = QLabel("MUSICAL TIMELINE")
         timeline_title.setObjectName("timelineTitle")
+        self.play_button = QPushButton("PLAY")
+        self.play_button.setObjectName("transportButton")
+        self.play_button.setFixedWidth(70)
+        self.play_button.clicked.connect(self._toggle_playback)
+        self.timecode_label = QLabel("0:00 / 0:00")
+        self.timecode_label.setObjectName("timelineMeta")
+        self.timecode_label.setMinimumWidth(92)
         self.timeline_meta = QLabel("WAITING FOR MUSIC")
         self.timeline_meta.setObjectName("timelineMeta")
         timeline_header_layout.addWidget(timeline_title)
+        timeline_header_layout.addSpacing(10)
+        timeline_header_layout.addWidget(self.play_button)
+        timeline_header_layout.addWidget(self.timecode_label)
         timeline_header_layout.addStretch()
         timeline_header_layout.addWidget(self.timeline_meta)
         self.timeline = MusicTimeline()
+        self.timeline.seekRequested.connect(self._seek_timeline)
         layout.addWidget(preview, 1)
         layout.addWidget(timeline_header)
         layout.addWidget(self.timeline)
@@ -258,6 +300,7 @@ class KinebeatWindow(QMainWindow):
                 "Manual ranking",
             ]
         )
+        self.strategy_combo.currentTextChanged.connect(self._strategy_changed)
         layout.addWidget(eyebrow)
         layout.addWidget(title)
         layout.addWidget(helper)
@@ -322,6 +365,244 @@ class KinebeatWindow(QMainWindow):
         layout.addWidget(self.task_progress)
         layout.addWidget(self.cancel_button)
         return self.task_bar
+
+    def _setup_playback(self) -> None:
+        self.audio_output = QAudioOutput(self)
+        self.audio_output.setVolume(0.8)
+        self.media_player = QMediaPlayer(self)
+        self.media_player.setAudioOutput(self.audio_output)
+        self.media_player.positionChanged.connect(self._playback_position_changed)
+        self.media_player.playbackStateChanged.connect(self._playback_state_changed)
+        self.media_player.mediaStatusChanged.connect(self._media_status_changed)
+
+    def _setup_shortcuts(self) -> None:
+        QShortcut(QKeySequence.StandardKey.Open, self, activated=self._open_project)
+        QShortcut(QKeySequence.StandardKey.Save, self, activated=self._save_project)
+        QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self._toggle_playback)
+
+    @Slot()
+    def _open_project(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Open Kinebeat project", "", PROJECT_FILTER)
+        if not path:
+            return
+        try:
+            state = load_project(Path(path))
+        except ProjectFormatError as error:
+            QMessageBox.warning(self, "Kinebeat could not open the project", str(error))
+            return
+        self._apply_project(Path(path), state)
+
+    @Slot()
+    def _save_project(self) -> None:
+        path = self._project_path
+        if path is None:
+            selected, _ = QFileDialog.getSaveFileName(
+                self, "Save Kinebeat project", "Untitled.kinebeat", PROJECT_FILTER
+            )
+            if not selected:
+                return
+            path = Path(selected)
+            if path.suffix.lower() != ".kinebeat":
+                path = path.with_suffix(".kinebeat")
+        try:
+            save_project(path, self._project_state())
+        except OSError as error:
+            QMessageBox.warning(self, "Kinebeat could not save the project", str(error))
+            return
+        self._project_path = path.resolve()
+        self._set_dirty(False)
+        self.task_title.setText("PROJECT SAVED")
+        self.task_detail.setText(str(self._project_path))
+
+    def _project_state(self) -> ProjectState:
+        return ProjectState(
+            song=self._song,
+            analysis=self._analysis,
+            video_paths=self._video_paths,
+            footage_strategy=self.strategy_combo.currentText(),
+            playhead_seconds=self.timeline.position_seconds,
+        )
+
+    def _apply_project(self, path: Path, state: ProjectState) -> None:
+        self.media_player.stop()
+        self._loading_project = True
+        self._song = state.song
+        self._analysis = state.analysis
+        self._video_paths = state.video_paths
+        self._project_path = path.resolve()
+        strategy_index = self.strategy_combo.findText(state.footage_strategy)
+        self.strategy_combo.setCurrentIndex(max(0, strategy_index))
+        self._loading_project = False
+
+        if self._song:
+            self.song_name.setText(self._song.path.name)
+            self.song_meta.setText(
+                f"{self._song.display_duration} · {self._song.sample_rate / 1000:.1f} kHz · "
+                f"{self._song.channels} ch · {self._song.codec.upper()}"
+            )
+            if self._analysis:
+                self.timeline.set_analysis(self._analysis)
+                self.timeline_meta.setText(
+                    f"{len(self._analysis.events)} EVENTS · {self._analysis.model_name.upper()}"
+                )
+                self.preview_eyebrow.setText("PROJECT LOADED")
+                self.preview_title.setText("Your cut is ready\nto keep shaping.")
+                self.preview_body.setText(
+                    f"{len(self._analysis.events)} musical events and "
+                    f"{len(self._video_paths)} video clips were restored."
+                )
+            else:
+                self.timeline.set_song(self._song)
+                self.timeline_meta.setText(f"{self._song.display_duration} · READY TO ANALYSE")
+                self.preview_eyebrow.setText("PROJECT LOADED")
+                self.preview_title.setText("Ready to find\nthe structure.")
+                self.preview_body.setText(
+                    "Analyse the song to separate instruments and rebuild its musical events."
+                )
+        else:
+            self.song_name.setText("No song loaded")
+            self.song_meta.setText("Your music stays on this computer.")
+            self.timeline.set_song(None)
+            self.timeline_meta.setText("WAITING FOR MUSIC")
+            self.preview_eyebrow.setText("START WITH THE SOUND")
+            self.preview_title.setText("Your song sets\nthe timeline.")
+            self.preview_body.setText(
+                "Kinebeat separates the instruments, finds their events, "
+                "and builds an edit you can keep refining."
+            )
+
+        self._update_footage_copy()
+        self._pending_playhead_seconds = state.playhead_seconds
+        self.timeline.set_position(state.playhead_seconds)
+        self._update_timecode(state.playhead_seconds)
+        self._set_song_playback_source(state.playhead_seconds)
+        self._set_dirty(False)
+        self._sync_state()
+
+        missing = [media_path for media_path in self._all_media_paths() if not media_path.is_file()]
+        if missing:
+            preview = "\n".join(str(media_path) for media_path in missing[:5])
+            extra = f"\n…and {len(missing) - 5} more" if len(missing) > 5 else ""
+            QMessageBox.warning(
+                self,
+                "Some project media is missing",
+                f"The project opened, but these files could not be found:\n\n{preview}{extra}",
+            )
+
+    def _all_media_paths(self) -> tuple[Path, ...]:
+        song_paths = (self._song.path,) if self._song else ()
+        return song_paths + self._video_paths
+
+    @Slot()
+    def _choose_video_clips(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(self, "Import video clips", "", VIDEO_FILTER)
+        if not paths:
+            return
+        existing = {path.resolve() for path in self._video_paths}
+        imported = list(self._video_paths)
+        for value in paths:
+            path = Path(value).resolve()
+            if path not in existing:
+                existing.add(path)
+                imported.append(path)
+        self._video_paths = tuple(imported)
+        self._update_footage_copy()
+        self.preview_eyebrow.setText("FOOTAGE READY")
+        self.preview_title.setText("Ready to build\nthe first cut.")
+        self.preview_body.setText(
+            f"{len(self._video_paths)} clips will be selected using "
+            f"{self.strategy_combo.currentText().lower()}."
+        )
+        self.task_title.setText("FOOTAGE READY")
+        self.task_detail.setText(f"{len(self._video_paths)} video clips imported")
+        self._set_dirty(True)
+        self._sync_state()
+
+    def _update_footage_copy(self) -> None:
+        count = len(self._video_paths)
+        if not count:
+            self.footage_copy.setText("Import clips after the musical structure is ready.")
+            self.footage_button.setText("Import video clips")
+            return
+        noun = "clip" if count == 1 else "clips"
+        names = ", ".join(path.name for path in self._video_paths[:3])
+        if count > 3:
+            names += f" +{count - 3} more"
+        self.footage_copy.setText(f"{count} {noun} imported\n{names}")
+        self.footage_button.setText("Add video clips")
+
+    @Slot(str)
+    def _strategy_changed(self, _strategy: str) -> None:
+        if not self._loading_project and self._analysis:
+            self._set_dirty(True)
+
+    @Slot()
+    def _toggle_playback(self) -> None:
+        if not self._song or not self._song.path.is_file():
+            QMessageBox.information(
+                self, "Music is unavailable", "Load or reconnect the project music before playback."
+            )
+            return
+        if self.media_player.playbackState() is QMediaPlayer.PlaybackState.PlayingState:
+            self.media_player.pause()
+        else:
+            if self.timeline.position_seconds >= self._song.duration_seconds - 0.05:
+                self._seek_timeline(0.0)
+            self.media_player.play()
+
+    @Slot(float)
+    def _seek_timeline(self, seconds: float) -> None:
+        self._pending_playhead_seconds = max(0.0, seconds)
+        self.timeline.set_position(seconds)
+        self._update_timecode(seconds)
+        if self._song and self._song.path.is_file():
+            self.media_player.setPosition(round(seconds * 1000))
+
+    @Slot(int)
+    def _playback_position_changed(self, milliseconds: int) -> None:
+        seconds = milliseconds / 1000.0
+        self.timeline.set_position(seconds)
+        self._update_timecode(seconds)
+
+    @Slot(QMediaPlayer.PlaybackState)
+    def _playback_state_changed(self, state: QMediaPlayer.PlaybackState) -> None:
+        self.play_button.setText(
+            "PAUSE" if state is QMediaPlayer.PlaybackState.PlayingState else "PLAY"
+        )
+
+    @Slot(QMediaPlayer.MediaStatus)
+    def _media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
+        if status in (
+            QMediaPlayer.MediaStatus.LoadedMedia,
+            QMediaPlayer.MediaStatus.BufferedMedia,
+        ):
+            self.media_player.setPosition(round(self._pending_playhead_seconds * 1000))
+
+    def _set_song_playback_source(self, position_seconds: float = 0.0) -> None:
+        self.media_player.stop()
+        self._pending_playhead_seconds = position_seconds
+        if self._song and self._song.path.is_file():
+            self.media_player.setSource(QUrl.fromLocalFile(str(self._song.path.resolve())))
+        else:
+            self.media_player.setSource(QUrl())
+
+    def _update_timecode(self, seconds: float) -> None:
+        duration = self._song.duration_seconds if self._song else 0.0
+        self.timecode_label.setText(f"{self._format_time(seconds)} / {self._format_time(duration)}")
+
+    @staticmethod
+    def _format_time(seconds: float) -> str:
+        minutes, whole_seconds = divmod(max(0, round(seconds)), 60)
+        return f"{minutes}:{whole_seconds:02d}"
+
+    def _set_dirty(self, dirty: bool) -> None:
+        self._dirty = dirty
+        self.setWindowModified(dirty)
+        self._update_window_title()
+
+    def _update_window_title(self) -> None:
+        name = self._project_path.stem if self._project_path else "Untitled"
+        self.setWindowTitle(f"{name}[*] — Kinebeat")
 
     @Slot()
     def _choose_music(self) -> None:
@@ -401,7 +682,11 @@ class KinebeatWindow(QMainWindow):
             "before finding timeline events."
         )
         self.timeline.set_song(result)
+        self.timeline.set_position(0.0)
         self.timeline_meta.setText(f"{result.display_duration} · READY TO ANALYSE")
+        self._update_timecode(0.0)
+        self._set_song_playback_source()
+        self._set_dirty(True)
 
     @Slot(object)
     def _analysis_ready(self, result: object) -> None:
@@ -415,6 +700,7 @@ class KinebeatWindow(QMainWindow):
             "The detected events are ready for mappings, clip generation, "
             "locking, and regeneration."
         )
+        self._set_dirty(True)
 
     @Slot(str)
     def _task_failed(self, message: str) -> None:
@@ -448,7 +734,16 @@ class KinebeatWindow(QMainWindow):
         self.analyse_button.setEnabled(self._song is not None and not busy)
         self.footage_button.setEnabled(self._analysis is not None and not busy)
         self.strategy_combo.setEnabled(self._analysis is not None and not busy)
-        self.generate_button.setEnabled(False)
+        self.generate_button.setEnabled(
+            self._analysis is not None and bool(self._video_paths) and not busy
+        )
+        self.play_button.setEnabled(
+            self._song is not None and self._song.path.is_file() and not busy
+        )
+        self.open_project_button.setEnabled(not busy)
+        self.save_project_button.setEnabled(
+            (self._song is not None or bool(self._video_paths)) and not busy
+        )
         self.cancel_button.setEnabled(busy)
 
     def load_demo_state(self) -> None:
@@ -485,12 +780,16 @@ class KinebeatWindow(QMainWindow):
         )
         self._song = song
         self._analysis = analysis
+        self._video_paths = ()
         self.song_name.setText(song.path.name)
         self.song_meta.setText("2:54 · 48.0 kHz · 2 ch · PCM_S24LE")
         self.preview_eyebrow.setText("STRUCTURE READY")
         self.preview_title.setText("Now bring in\nthe footage.")
         self.timeline.set_analysis(analysis)
+        self.timeline.set_position(0.0)
         self.timeline_meta.setText(f"{len(events)} EVENTS · HTDEMUCS_6S")
+        self._update_timecode(0.0)
+        self._set_song_playback_source()
         self.preview_body.setText(
             f"{len(events)} musical events are ready. "
             "Import clips to generate a complete first cut."
@@ -498,4 +797,5 @@ class KinebeatWindow(QMainWindow):
         self.task_title.setText("STRUCTURE READY")
         self.task_detail.setText("Import footage to generate the first cut")
         self.task_progress.setValue(100)
+        self._set_dirty(False)
         self._sync_state()

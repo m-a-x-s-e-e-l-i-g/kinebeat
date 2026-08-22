@@ -7,11 +7,21 @@ from kinebeat.domain.music import (
     SongMetadata,
     StemArtifact,
 )
+from kinebeat.domain.project import (
+    ProjectFormatError,
+    ProjectState,
+    load_project,
+    save_project,
+)
 
 __all__ = [
     "EventKind",
     "MusicAnalysis",
     "MusicalEvent",
+    "ProjectFormatError",
+    "ProjectState",
     "SongMetadata",
     "StemArtifact",
+    "load_project",
+    "save_project",
 ]

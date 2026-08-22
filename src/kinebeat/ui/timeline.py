@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
 from kinebeat.domain import EventKind, MusicalEvent, MusicAnalysis, SongMetadata
 
 
 class MusicTimeline(QWidget):
+    seekRequested = Signal(float)
+
     lane_order = (
         EventKind.KICK,
         EventKind.SNARE,
@@ -36,16 +38,40 @@ class MusicTimeline(QWidget):
         self.setMinimumHeight(230)
         self._song: SongMetadata | None = None
         self._events: tuple[MusicalEvent, ...] = ()
+        self._position_seconds = 0.0
+
+    @property
+    def position_seconds(self) -> float:
+        return self._position_seconds
 
     def set_song(self, song: SongMetadata | None) -> None:
         self._song = song
         self._events = ()
+        self._position_seconds = 0.0
         self.update()
 
     def set_analysis(self, analysis: MusicAnalysis | None) -> None:
         self._song = analysis.song if analysis else self._song
         self._events = analysis.events if analysis else ()
         self.update()
+
+    def set_position(self, seconds: float) -> None:
+        duration = self._song.duration_seconds if self._song else 0.0
+        self._position_seconds = max(0.0, min(float(seconds), duration))
+        self.update()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if not self._song or self._song.duration_seconds <= 0:
+            return
+        position = event.position()
+        content_left = 76.0
+        content_width = max(1.0, self.width() - content_left - 12.0)
+        if position.x() < content_left or position.x() > content_left + content_width:
+            return
+        ratio = (position.x() - content_left) / content_width
+        seconds = ratio * self._song.duration_seconds
+        self.set_position(seconds)
+        self.seekRequested.emit(seconds)
 
     def paintEvent(self, event: object) -> None:  # noqa: ARG002
         painter = QPainter(self)
@@ -67,6 +93,7 @@ class MusicTimeline(QWidget):
                 lane_height,
             )
             self._paint_lane(painter, kind, lane)
+        self._paint_playhead(painter, content)
 
     def _paint_grid(self, painter: QPainter, rect: QRectF) -> None:
         painter.setPen(QPen(QColor("#292b29"), 1))
@@ -143,3 +170,22 @@ class MusicTimeline(QWidget):
             )
         else:
             painter.drawRoundedRect(QRectF(point.x() - 2, point.y() - radius, 4, radius * 2), 2, 2)
+
+    def _paint_playhead(self, painter: QPainter, content: QRectF) -> None:
+        if not self._song or self._song.duration_seconds <= 0:
+            return
+        ratio = self._position_seconds / self._song.duration_seconds
+        x = content.left() + content.width() * ratio
+        painter.setPen(QPen(QColor("#f2f4ee"), 1.5))
+        painter.drawLine(QPointF(x, content.top()), QPointF(x, self.height() - 8))
+        painter.setBrush(QColor("#f2f4ee"))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPolygon(
+            QPolygonF(
+                [
+                    QPointF(x - 5, content.top()),
+                    QPointF(x + 5, content.top()),
+                    QPointF(x, content.top() + 7),
+                ]
+            )
+        )
