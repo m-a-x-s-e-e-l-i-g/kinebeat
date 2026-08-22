@@ -18,7 +18,7 @@ def _analysis() -> MusicAnalysis:
     )
 
 
-def test_first_cut_places_clip_boundaries_on_kicks() -> None:
+def test_video_edit_places_clip_boundaries_on_kicks() -> None:
     progress: list[tuple[int, str]] = []
 
     result = generate_first_cut(
@@ -41,10 +41,10 @@ def test_first_cut_places_clip_boundaries_on_kicks() -> None:
         Path("one.mp4"),
     ]
     assert progress[0] == (5, "Finding kick cut points")
-    assert progress[-1] == (100, "First cut ready · 3 edits")
+    assert progress[-1] == (100, "Video edit ready · 3 edits")
 
 
-def test_random_first_cut_is_reproducible_from_seed() -> None:
+def test_random_video_edit_is_reproducible_from_seed() -> None:
     kwargs = {
         "strategy": "Random",
         "seed": 173,

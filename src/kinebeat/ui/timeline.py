@@ -129,7 +129,7 @@ class MusicTimeline(QWidget):
         painter.drawRect(rect)
         if not self._first_cut or not self._song or self._song.duration_seconds <= 0:
             painter.setPen(QColor("#636763"))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "GENERATE A FIRST CUT")
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "GENERATE A VIDEO EDIT")
             return
 
         duration = self._song.duration_seconds

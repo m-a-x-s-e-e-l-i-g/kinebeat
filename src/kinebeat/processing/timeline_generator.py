@@ -22,7 +22,7 @@ def generate_first_cut(
 ) -> GeneratedTimeline:
     """Build a deterministic clip timeline with cuts on detected kicks."""
     if not video_paths:
-        raise ValueError("Import at least one video clip before generating a first cut.")
+        raise ValueError("Import at least one video clip before generating a video edit.")
 
     progress(5, "Finding kick cut points")
     cut_points = _kick_cut_points(analysis)
@@ -35,7 +35,7 @@ def generate_first_cut(
     previous_path: Path | None = None
     for index, (start, end) in enumerate(zip(cut_points, cut_points[1:], strict=False)):
         if cancelled():
-            raise RuntimeError("First-cut generation was cancelled.")
+            raise RuntimeError("Video-edit generation was cancelled.")
         source = _select_source(
             video_paths,
             strategy=strategy,
@@ -50,7 +50,7 @@ def generate_first_cut(
         value = 12 + round(82 * (index + 1) / segment_count)
         progress(value, f"Placing edit {index + 1} of {segment_count}")
 
-    progress(100, f"First cut ready · {segment_count} edits")
+    progress(100, f"Video edit ready · {segment_count} edits")
     return GeneratedTimeline(tuple(clips), seed)
 
 

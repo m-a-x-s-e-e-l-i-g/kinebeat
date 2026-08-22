@@ -117,6 +117,7 @@ QFrame#previewSurface {
     background: #070807;
     border-bottom: 1px solid #30332f;
 }
+QStackedWidget#previewStack, QVideoWidget#videoPreview { background: #070807; }
 QLabel#previewTitle {
     color: #f0f2ed;
     font-family: "__APP_FONT__";

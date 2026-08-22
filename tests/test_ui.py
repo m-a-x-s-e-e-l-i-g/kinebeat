@@ -9,6 +9,8 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QMessageBox
 
 from kinebeat.domain import EffectAction, EventKind, InstrumentMapping, ProjectState
+from kinebeat.processing import VideoEditPreview, generate_first_cut
+from kinebeat.ui import window as window_module
 from kinebeat.ui.window import KinebeatWindow
 
 
@@ -67,13 +69,26 @@ def test_import_video_button_adds_clips_and_unlocks_generation(tmp_path, monkeyp
     window.close()
 
 
-def test_generate_first_cut_reports_progress_and_draws_edits(tmp_path, monkeypatch) -> None:
+def test_generate_video_edit_reports_progress_and_draws_edits(tmp_path, monkeypatch) -> None:
     _app()
     window = KinebeatWindow()
     window.load_demo_state()
     window._video_paths = (tmp_path / "one.mp4", tmp_path / "two.mp4")
     window._sync_state()
     progress: list[tuple[int, str]] = []
+
+    def fake_preview(analysis, video_paths, *, strategy, seed, output_path, progress, cancelled):
+        timeline = generate_first_cut(
+            analysis,
+            video_paths,
+            strategy=strategy,
+            seed=seed,
+            progress=progress,
+            cancelled=cancelled,
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.touch()
+        return VideoEditPreview(timeline, output_path, 640, 360, 24)
 
     def run_immediately(*, task, on_success, **_kwargs) -> None:
         result = task(
@@ -83,26 +98,53 @@ def test_generate_first_cut_reports_progress_and_draws_edits(tmp_path, monkeypat
         on_success(result)
 
     monkeypatch.setattr(window, "_start_task", run_immediately)
+    monkeypatch.setattr(window_module, "generate_video_edit_preview", fake_preview)
+    monkeypatch.setattr(
+        window,
+        "_set_video_preview_source",
+        lambda path, position_seconds=0.0: setattr(window, "_preview_path", path),
+    )
 
     window.generate_button.click()
 
     assert window._generated_timeline is not None
     assert window.timeline._first_cut is window._generated_timeline
-    assert window.task_title.text() == "FIRST CUT READY"
+    assert window.task_title.text() == "VIDEO EDIT READY"
     assert window.task_progress.value() == 100
-    assert window.generate_button.text() == "Regenerate first cut"
+    assert window.generate_button.text() == "Regenerate video edit"
     assert "beat-synced edits" in window.task_detail.text()
     assert progress[0] == (5, "Finding kick cut points")
     assert progress[-1][0] == 100
+    assert window._preview_path is not None
     window.close()
 
 
-def test_generate_button_runs_background_first_cut(tmp_path) -> None:
+def test_generate_button_runs_background_video_edit(tmp_path, monkeypatch) -> None:
     _app()
     window = KinebeatWindow()
     window.load_demo_state()
     window._video_paths = (tmp_path / "one.mp4", tmp_path / "two.mp4")
     window._sync_state()
+
+    def fake_preview(analysis, video_paths, *, strategy, seed, output_path, progress, cancelled):
+        timeline = generate_first_cut(
+            analysis,
+            video_paths,
+            strategy=strategy,
+            seed=seed,
+            progress=progress,
+            cancelled=cancelled,
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.touch()
+        return VideoEditPreview(timeline, output_path, 640, 360, 24)
+
+    monkeypatch.setattr(window_module, "generate_video_edit_preview", fake_preview)
+    monkeypatch.setattr(
+        window,
+        "_set_video_preview_source",
+        lambda path, position_seconds=0.0: setattr(window, "_preview_path", path),
+    )
 
     window.generate_button.click()
     loop = QEventLoop()
@@ -113,9 +155,10 @@ def test_generate_button_runs_background_first_cut(tmp_path) -> None:
 
     assert window._task_thread is None
     assert window._generated_timeline is not None
-    assert window.task_title.text() == "FIRST CUT READY"
+    assert window.task_title.text() == "VIDEO EDIT READY"
     assert window.task_progress.value() == 100
-    assert window.generate_button.text() == "Regenerate first cut"
+    assert window.generate_button.text() == "Regenerate video edit"
+    assert window._preview_path is not None
     window.close()
 
 

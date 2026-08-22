@@ -1,7 +1,7 @@
 # Kinebeat
 
 Kinebeat is a local-first music-driven video editor. It analyses a song, creates an
-editable first-cut timeline from imported footage, and lets creators keep the good
+editable video-edit timeline from imported footage, and lets creators keep the good
 parts while regenerating everything else.
 
 ## Product direction
@@ -23,10 +23,11 @@ Actions.
 
 The current runnable slice covers local music import, waveform extraction, automatic
 six-stem separation through Demucs, musical-event detection, multi-clip video import,
-editable per-instrument action mappings, kick-aligned first-cut generation with visible
-background progress, music playback with timeline seeking, and versioned `.kinebeat`
-project save/load. Generated edit decisions are preserved while media remains external
-to the small project document. See
+editable per-instrument action mappings, kick-aligned video-edit generation with visible
+background progress, a lightweight video proxy with song-synchronised playback and
+timeline seeking, and versioned `.kinebeat` project save/load. Generated edit decisions
+are preserved while media remains external to the small project document; proxy video
+is rebuilt on demand after loading a project. See
 [the confirmed design brief](docs/DESIGN_BRIEF.md).
 
 ## Development

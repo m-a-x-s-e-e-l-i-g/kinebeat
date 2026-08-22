@@ -19,6 +19,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -51,7 +53,12 @@ from kinebeat.domain import (
     load_project,
     save_project,
 )
-from kinebeat.processing import MusicAnalysisService, generate_first_cut, probe_song
+from kinebeat.processing import (
+    MusicAnalysisService,
+    VideoEditPreview,
+    generate_video_edit_preview,
+    probe_song,
+)
 from kinebeat.ui.tasks import TaskWorker
 from kinebeat.ui.timeline import MusicTimeline
 
@@ -128,6 +135,7 @@ class KinebeatWindow(QMainWindow):
         self._song: SongMetadata | None = None
         self._analysis: MusicAnalysis | None = None
         self._generated_timeline: GeneratedTimeline | None = None
+        self._preview_path: Path | None = None
         self._video_paths: tuple[Path, ...] = ()
         self._project_path: Path | None = None
         self._dirty = False
@@ -266,8 +274,13 @@ class KinebeatWindow(QMainWindow):
         preview = QFrame()
         preview.setObjectName("previewSurface")
         preview_layout = QVBoxLayout(preview)
-        preview_layout.setContentsMargins(40, 30, 40, 30)
-        preview_layout.addStretch()
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        self.preview_stack = QStackedWidget()
+        self.preview_stack.setObjectName("previewStack")
+        preview_message = QWidget()
+        message_layout = QVBoxLayout(preview_message)
+        message_layout.setContentsMargins(40, 30, 40, 30)
+        message_layout.addStretch()
         self.preview_eyebrow = QLabel("START WITH THE SOUND")
         self.preview_eyebrow.setObjectName("eyebrow")
         self.preview_title = QLabel("Your song sets\nthe timeline.")
@@ -279,11 +292,17 @@ class KinebeatWindow(QMainWindow):
         self.preview_body.setObjectName("previewBody")
         self.preview_body.setWordWrap(True)
         self.preview_body.setMaximumWidth(520)
-        preview_layout.addWidget(self.preview_eyebrow)
-        preview_layout.addWidget(self.preview_title)
-        preview_layout.addSpacing(6)
-        preview_layout.addWidget(self.preview_body)
-        preview_layout.addStretch()
+        message_layout.addWidget(self.preview_eyebrow)
+        message_layout.addWidget(self.preview_title)
+        message_layout.addSpacing(6)
+        message_layout.addWidget(self.preview_body)
+        message_layout.addStretch()
+        self.video_widget = QVideoWidget()
+        self.video_widget.setObjectName("videoPreview")
+        self.video_widget.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+        self.preview_stack.addWidget(preview_message)
+        self.preview_stack.addWidget(self.video_widget)
+        preview_layout.addWidget(self.preview_stack)
         timeline_header = QFrame()
         timeline_header.setObjectName("timelineHeader")
         timeline_header.setFixedHeight(48)
@@ -323,7 +342,7 @@ class KinebeatWindow(QMainWindow):
         layout.setSpacing(12)
         eyebrow = QLabel("GENERATOR")
         eyebrow.setObjectName("eyebrow")
-        title = QLabel("First-cut rules")
+        title = QLabel("Video edit rules")
         title.setObjectName("sectionTitle")
         helper = QLabel("Mappings activate after music analysis.")
         helper.setObjectName("bodyMuted")
@@ -353,9 +372,9 @@ class KinebeatWindow(QMainWindow):
         for mapping in DEFAULT_EFFECT_MAPPINGS:
             layout.addWidget(self._mapping_row(mapping.instrument, mapping.action))
         layout.addStretch()
-        self.generate_button = QPushButton("Generate first cut")
+        self.generate_button = QPushButton("Generate video edit")
         self.generate_button.setObjectName("primaryButton")
-        self.generate_button.clicked.connect(self._generate_first_cut)
+        self.generate_button.clicked.connect(self._generate_video_edit)
         layout.addWidget(self.generate_button)
         return inspector
 
@@ -416,6 +435,10 @@ class KinebeatWindow(QMainWindow):
         self.media_player.positionChanged.connect(self._playback_position_changed)
         self.media_player.playbackStateChanged.connect(self._playback_state_changed)
         self.media_player.mediaStatusChanged.connect(self._media_status_changed)
+        self.video_player = QMediaPlayer(self)
+        self.video_player.setVideoOutput(self.video_widget)
+        self.video_player.mediaStatusChanged.connect(self._video_media_status_changed)
+        self.video_player.errorOccurred.connect(self._video_playback_failed)
 
     def _setup_save_feedback(self) -> None:
         self._save_feedback_effect = QGraphicsOpacityEffect(self.save_project_button)
@@ -550,6 +573,7 @@ class KinebeatWindow(QMainWindow):
 
     def _apply_project(self, path: Path, state: ProjectState) -> None:
         self.media_player.stop()
+        self._set_video_preview_source(None)
         self._loading_project = True
         self._song = state.song
         self._analysis = state.analysis
@@ -583,18 +607,19 @@ class KinebeatWindow(QMainWindow):
                         f"{len(self._generated_timeline.clips)} EDITS · "
                         f"{len(self._analysis.events)} EVENTS"
                     )
-                    self.preview_eyebrow.setText("FIRST CUT RESTORED")
-                    self.preview_title.setText("Your cut is ready\nto keep shaping.")
+                    self.preview_eyebrow.setText("EDIT DECISIONS RESTORED")
+                    self.preview_title.setText("Build the playable\nvideo preview.")
                     self.preview_body.setText(
                         f"{len(self._generated_timeline.clips)} beat-synced edits and "
-                        f"{len(self._video_paths)} source clips were restored."
+                        f"{len(self._video_paths)} source clips were restored. Generate the "
+                        "video edit to render its lightweight preview."
                     )
                 else:
                     self.timeline_meta.setText(
                         f"{len(self._analysis.events)} EVENTS · {self._analysis.model_name.upper()}"
                     )
                     self.preview_eyebrow.setText("PROJECT LOADED")
-                    self.preview_title.setText("Ready to build\nthe first cut.")
+                    self.preview_title.setText("Ready to build\nthe video edit.")
                     self.preview_body.setText(
                         f"{len(self._analysis.events)} musical events and "
                         f"{len(self._video_paths)} video clips were restored."
@@ -655,8 +680,9 @@ class KinebeatWindow(QMainWindow):
                 imported.append(path)
         self._video_paths = tuple(imported)
         self._update_footage_copy()
+        self.preview_stack.setCurrentIndex(0)
         self.preview_eyebrow.setText("FOOTAGE READY")
-        self.preview_title.setText("Ready to build\nthe first cut.")
+        self.preview_title.setText("Ready to build\nthe video edit.")
         self.preview_body.setText(
             f"{len(self._video_paths)} clips will be selected using "
             f"{self.strategy_combo.currentText().lower()}."
@@ -690,30 +716,37 @@ class KinebeatWindow(QMainWindow):
             self._set_dirty(True)
 
     @Slot()
-    def _generate_first_cut(self) -> None:
+    def _generate_video_edit(self) -> None:
         if not self._analysis or not self._video_paths:
             return
         analysis = self._analysis
         video_paths = self._video_paths
         strategy = self.strategy_combo.currentText()
         seed = secrets.randbits(31)
+        cache_location = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.CacheLocation
+        )
+        output_path = Path(cache_location) / "previews" / f"video-edit-{seed}.mp4"
         self.generate_button.setText("Generating…")
-        self.preview_eyebrow.setText("GENERATING FIRST CUT")
-        self.preview_title.setText("Placing clips\non every kick.")
+        self.preview_stack.setCurrentIndex(0)
+        self.preview_eyebrow.setText("GENERATING VIDEO EDIT")
+        self.preview_title.setText("Building your\nplayable preview.")
         self.preview_body.setText(
-            "The timeline will appear here when the beat-synced edit is ready."
+            "Rendering a lightweight 640 × 360 proxy from your source clips. "
+            "Progress stays visible below."
         )
         self._start_task(
-            title="GENERATING FIRST CUT",
+            title="GENERATING VIDEO EDIT",
             initial_detail="Finding kick cut points",
-            task=lambda **kwargs: generate_first_cut(
+            task=lambda **kwargs: generate_video_edit_preview(
                 analysis,
                 video_paths,
                 strategy=strategy,
                 seed=seed,
+                output_path=output_path,
                 **kwargs,
             ),
-            on_success=self._first_cut_ready,
+            on_success=self._video_edit_ready,
         )
 
     @Slot()
@@ -725,9 +758,13 @@ class KinebeatWindow(QMainWindow):
             return
         if self.media_player.playbackState() is QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
+            self.video_player.pause()
         else:
             if self.timeline.position_seconds >= self._song.duration_seconds - 0.05:
                 self._seek_timeline(0.0)
+            if self._preview_path:
+                self.video_player.setPosition(round(self.timeline.position_seconds * 1000))
+                self.video_player.play()
             self.media_player.play()
 
     @Slot(float)
@@ -737,18 +774,30 @@ class KinebeatWindow(QMainWindow):
         self._update_timecode(seconds)
         if self._song and self._song.path.is_file():
             self.media_player.setPosition(round(seconds * 1000))
+        if self._preview_path:
+            self.video_player.setPosition(round(seconds * 1000))
 
     @Slot(int)
     def _playback_position_changed(self, milliseconds: int) -> None:
         seconds = milliseconds / 1000.0
         self.timeline.set_position(seconds)
         self._update_timecode(seconds)
+        if self._preview_path and abs(self.video_player.position() - milliseconds) > 180:
+            self.video_player.setPosition(milliseconds)
 
     @Slot(QMediaPlayer.PlaybackState)
     def _playback_state_changed(self, state: QMediaPlayer.PlaybackState) -> None:
         self.play_button.setText(
             "PAUSE" if state is QMediaPlayer.PlaybackState.PlayingState else "PLAY"
         )
+        if not self._preview_path:
+            return
+        if state is QMediaPlayer.PlaybackState.PlayingState:
+            self.video_player.play()
+        elif state is QMediaPlayer.PlaybackState.PausedState:
+            self.video_player.pause()
+        else:
+            self.video_player.stop()
 
     @Slot(QMediaPlayer.MediaStatus)
     def _media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
@@ -758,6 +807,28 @@ class KinebeatWindow(QMainWindow):
         ):
             self.media_player.setPosition(round(self._pending_playhead_seconds * 1000))
 
+    @Slot(QMediaPlayer.MediaStatus)
+    def _video_media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
+        if status in (
+            QMediaPlayer.MediaStatus.LoadedMedia,
+            QMediaPlayer.MediaStatus.BufferedMedia,
+        ):
+            self.video_player.setPosition(round(self._pending_playhead_seconds * 1000))
+            self.preview_stack.setCurrentIndex(1)
+            if self.media_player.playbackState() is QMediaPlayer.PlaybackState.PlayingState:
+                self.video_player.play()
+
+    @Slot(object, str)
+    def _video_playback_failed(self, _error: object, message: str) -> None:
+        if not self._preview_path:
+            return
+        self.preview_stack.setCurrentIndex(0)
+        self.preview_eyebrow.setText("PREVIEW COULD NOT PLAY")
+        self.preview_title.setText("The edit exists,\nbut playback failed.")
+        self.preview_body.setText(message or "The local video backend could not open the proxy.")
+        self.task_title.setText("PREVIEW PLAYBACK NEEDS ATTENTION")
+        self.task_detail.setText(message or "The local video backend could not open the proxy")
+
     def _set_song_playback_source(self, position_seconds: float = 0.0) -> None:
         self.media_player.stop()
         self._pending_playhead_seconds = position_seconds
@@ -765,6 +836,18 @@ class KinebeatWindow(QMainWindow):
             self.media_player.setSource(QUrl.fromLocalFile(str(self._song.path.resolve())))
         else:
             self.media_player.setSource(QUrl())
+
+    def _set_video_preview_source(self, path: Path | None, position_seconds: float = 0.0) -> None:
+        self.video_player.stop()
+        self._preview_path = path.resolve() if path else None
+        self._pending_playhead_seconds = position_seconds
+        if self._preview_path and self._preview_path.is_file():
+            self.video_player.setSource(QUrl.fromLocalFile(str(self._preview_path)))
+            self.video_player.setPosition(round(position_seconds * 1000))
+            self.preview_stack.setCurrentIndex(1)
+        else:
+            self.video_player.setSource(QUrl())
+            self.preview_stack.setCurrentIndex(0)
 
     def _update_timecode(self, seconds: float) -> None:
         duration = self._song.duration_seconds if self._song else 0.0
@@ -853,6 +936,7 @@ class KinebeatWindow(QMainWindow):
         self._song = result
         self._analysis = None
         self._generated_timeline = None
+        self._set_video_preview_source(None)
         self.song_name.setText(result.path.name)
         self.song_meta.setText(
             f"{result.display_duration} · {result.sample_rate / 1000:.1f} kHz · "
@@ -876,6 +960,7 @@ class KinebeatWindow(QMainWindow):
         assert isinstance(result, MusicAnalysis)
         self._analysis = result
         self._generated_timeline = None
+        self._set_video_preview_source(None)
         self.timeline.set_analysis(result)
         self.timeline.set_first_cut(None)
         self.timeline_meta.setText(f"{len(result.events)} EVENTS · {result.model_name.upper()}")
@@ -888,22 +973,20 @@ class KinebeatWindow(QMainWindow):
         self._set_dirty(True)
 
     @Slot(object)
-    def _first_cut_ready(self, result: object) -> None:
-        assert isinstance(result, GeneratedTimeline)
-        self._generated_timeline = result
-        self.timeline.set_first_cut(result)
+    def _video_edit_ready(self, result: object) -> None:
+        assert isinstance(result, VideoEditPreview)
+        self._generated_timeline = result.timeline
+        self.timeline.set_first_cut(result.timeline)
         event_count = len(self._analysis.events) if self._analysis else 0
-        self.timeline_meta.setText(f"{len(result.clips)} EDITS · {event_count} EVENTS")
-        self.preview_eyebrow.setText("FIRST CUT READY")
-        self.preview_title.setText("The beat built\nyour first cut.")
-        self.preview_body.setText(
-            f"{len(result.clips)} edits now cut on detected kicks. "
-            "Press play to follow the cut against the song."
+        self.timeline_meta.setText(f"{len(result.timeline.clips)} EDITS · {event_count} EVENTS")
+        self._set_video_preview_source(result.path, self.timeline.position_seconds)
+        self.task_title.setText("VIDEO EDIT READY")
+        self.task_detail.setText(
+            f"{len(result.timeline.clips)} beat-synced edits · "
+            f"{result.width} × {result.height} preview"
         )
-        self.task_title.setText("FIRST CUT READY")
-        self.task_detail.setText(f"{len(result.clips)} beat-synced edits generated")
         self.task_progress.setValue(100)
-        self.generate_button.setText("Regenerate first cut")
+        self.generate_button.setText("Regenerate video edit")
         self._set_dirty(True)
 
     @Slot(str)
@@ -913,7 +996,7 @@ class KinebeatWindow(QMainWindow):
         self.task_detail.setText(message)
         self.task_progress.setValue(0)
         self.generate_button.setText(
-            "Regenerate first cut" if self._generated_timeline else "Generate first cut"
+            "Regenerate video edit" if self._generated_timeline else "Generate video edit"
         )
         QMessageBox.warning(self, "Kinebeat could not continue", message)
 
@@ -924,17 +1007,21 @@ class KinebeatWindow(QMainWindow):
         if self._task_failed_message:
             self._sync_state()
             return
-        if self._generated_timeline:
-            self.task_title.setText("FIRST CUT READY")
+        if self._preview_path and self._generated_timeline:
+            self.task_title.setText("VIDEO EDIT READY")
             self.task_detail.setText(
-                f"{len(self._generated_timeline.clips)} beat-synced edits generated"
+                f"{len(self._generated_timeline.clips)} beat-synced edits · playable preview ready"
             )
             self.task_progress.setValue(100)
-            self.generate_button.setText("Regenerate first cut")
+            self.generate_button.setText("Regenerate video edit")
+        elif self._generated_timeline:
+            self.task_title.setText("EDIT DECISIONS READY")
+            self.task_detail.setText("Generate the video edit to build its playable preview")
+            self.task_progress.setValue(100)
         elif self._analysis:
             self.task_title.setText("STRUCTURE READY")
             self.task_detail.setText(
-                "Generate the first cut" if self._video_paths else "Import footage to continue"
+                "Generate the video edit" if self._video_paths else "Import footage to continue"
             )
             self.task_progress.setValue(100)
         elif self._song:
@@ -962,7 +1049,7 @@ class KinebeatWindow(QMainWindow):
         )
         if not busy:
             self.generate_button.setText(
-                "Regenerate first cut" if self._generated_timeline else "Generate first cut"
+                "Regenerate video edit" if self._generated_timeline else "Generate video edit"
             )
         self.play_button.setEnabled(
             self._song is not None and self._song.path.is_file() and not busy
@@ -1008,6 +1095,7 @@ class KinebeatWindow(QMainWindow):
         self._song = song
         self._analysis = analysis
         self._generated_timeline = None
+        self._set_video_preview_source(None)
         self._video_paths = ()
         self.song_name.setText(song.path.name)
         self.song_meta.setText("2:54 · 48.0 kHz · 2 ch · PCM_S24LE")
@@ -1020,10 +1108,10 @@ class KinebeatWindow(QMainWindow):
         self._set_song_playback_source()
         self.preview_body.setText(
             f"{len(events)} musical events are ready. "
-            "Import clips to generate a complete first cut."
+            "Import clips to generate a complete video edit."
         )
         self.task_title.setText("STRUCTURE READY")
-        self.task_detail.setText("Import footage to generate the first cut")
+        self.task_detail.setText("Import footage to generate the video edit")
         self.task_progress.setValue(100)
         self._set_dirty(False)
         self._sync_state()
