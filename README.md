@@ -33,7 +33,8 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m kinebeat
 ```
 
-The larger analysis runtime is optional during UI development:
+`run.bat` and `run.sh` install the complete local analysis runtime automatically. For
+manual environment setup, install the analysis and development extras together:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[analysis,dev]"

@@ -14,7 +14,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo Preparing Kinebeat...
-".venv\Scripts\python.exe" -m pip install -e .
+".venv\Scripts\python.exe" -m pip install -e ".[analysis]"
 if errorlevel 1 exit /b %errorlevel%
 
 ".venv\Scripts\python.exe" -m kinebeat %*
