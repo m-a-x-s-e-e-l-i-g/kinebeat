@@ -8,7 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from kinebeat.domain.music import (
+    DEFAULT_EFFECT_MAPPINGS,
+    EffectAction,
     EventKind,
+    InstrumentMapping,
     MusicalEvent,
     MusicAnalysis,
     SongMetadata,
@@ -30,6 +33,7 @@ class ProjectState:
     video_paths: tuple[Path, ...] = ()
     footage_strategy: str = "Movement based"
     playhead_seconds: float = 0.0
+    effect_mappings: tuple[InstrumentMapping, ...] = DEFAULT_EFFECT_MAPPINGS
 
     def __post_init__(self) -> None:
         if self.analysis and not self.song:
@@ -116,6 +120,10 @@ def _state_to_dict(state: ProjectState, base: Path) -> dict[str, Any]:
         "video_paths": [_store_path(video_path, base) for video_path in state.video_paths],
         "footage_strategy": state.footage_strategy,
         "playhead_seconds": state.playhead_seconds,
+        "effect_mappings": [
+            {"instrument": mapping.instrument.value, "action": mapping.action.value}
+            for mapping in state.effect_mappings
+        ],
     }
 
 
@@ -158,6 +166,19 @@ def _state_from_dict(payload: dict[str, Any], base: Path) -> ProjectState:
         video_paths=tuple(_restore_path(value, base) for value in payload.get("video_paths", [])),
         footage_strategy=str(payload.get("footage_strategy", "Movement based")),
         playhead_seconds=float(payload.get("playhead_seconds", 0.0)),
+        effect_mappings=tuple(
+            InstrumentMapping(EventKind(mapping["instrument"]), EffectAction(mapping["action"]))
+            for mapping in payload.get(
+                "effect_mappings",
+                [
+                    {
+                        "instrument": default.instrument.value,
+                        "action": default.action.value,
+                    }
+                    for default in DEFAULT_EFFECT_MAPPINGS
+                ],
+            )
+        ),
     )
 
 

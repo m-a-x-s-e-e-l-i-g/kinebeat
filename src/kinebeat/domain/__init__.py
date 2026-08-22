@@ -1,7 +1,10 @@
 """Immutable domain models used by processing and UI layers."""
 
 from kinebeat.domain.music import (
+    DEFAULT_EFFECT_MAPPINGS,
+    EffectAction,
     EventKind,
+    InstrumentMapping,
     MusicalEvent,
     MusicAnalysis,
     SongMetadata,
@@ -15,7 +18,10 @@ from kinebeat.domain.project import (
 )
 
 __all__ = [
+    "DEFAULT_EFFECT_MAPPINGS",
+    "EffectAction",
     "EventKind",
+    "InstrumentMapping",
     "MusicAnalysis",
     "MusicalEvent",
     "ProjectFormatError",

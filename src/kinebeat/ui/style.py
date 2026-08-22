@@ -151,7 +151,13 @@ QComboBox QAbstractItemView {
 }
 QFrame#mappingRow { border-bottom: 1px solid #262926; }
 QLabel#mappingInstrument { color: #d9dcd6; font-size: 11px; font-weight: 700; }
-QLabel#mappingEffect { color: #777c76; font-size: 10px; }
+QComboBox#mappingCombo {
+    min-height: 28px;
+    color: #b9bdb7;
+    background: #131513;
+    border-color: #343834;
+    font-size: 10px;
+}
 QFrame#taskBar {
     background: #111311;
     border-top: 1px solid #30332f;

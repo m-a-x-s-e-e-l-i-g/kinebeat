@@ -14,6 +14,31 @@ class EventKind(StrEnum):
     OTHER = "other"
 
 
+class EffectAction(StrEnum):
+    CUT = "cut"
+    RANDOM_EFFECT = "random_effect"
+    ADD_INTENSITY = "add_intensity"
+    ADD_AMBIANCE = "add_ambiance"
+    LIGHT_EFFECT = "light_effect"
+    TIME_BEND = "time_bend"
+    NO_ACTION = "no_action"
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentMapping:
+    instrument: EventKind
+    action: EffectAction
+
+
+DEFAULT_EFFECT_MAPPINGS = (
+    InstrumentMapping(EventKind.KICK, EffectAction.CUT),
+    InstrumentMapping(EventKind.SNARE, EffectAction.RANDOM_EFFECT),
+    InstrumentMapping(EventKind.HI_HAT, EffectAction.LIGHT_EFFECT),
+    InstrumentMapping(EventKind.BASS, EffectAction.ADD_INTENSITY),
+    InstrumentMapping(EventKind.VOCAL, EffectAction.ADD_AMBIANCE),
+)
+
+
 @dataclass(frozen=True, slots=True)
 class SongMetadata:
     path: Path

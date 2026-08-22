@@ -1,9 +1,13 @@
+import json
 from pathlib import Path
 
 import pytest
 
 from kinebeat.domain import (
+    DEFAULT_EFFECT_MAPPINGS,
+    EffectAction,
     EventKind,
+    InstrumentMapping,
     MusicalEvent,
     MusicAnalysis,
     ProjectFormatError,
@@ -31,7 +35,11 @@ def test_project_round_trip_preserves_analysis_and_media_paths(tmp_path: Path) -
         (MusicalEvent(EventKind.KICK, 1.25, 0.91),),
         "htdemucs_6s",
     )
-    state = ProjectState(song, analysis, (video_path,), "Random", 12.75)
+    mappings = (
+        InstrumentMapping(EventKind.KICK, EffectAction.RANDOM_EFFECT),
+        InstrumentMapping(EventKind.BASS, EffectAction.ADD_INTENSITY),
+    )
+    state = ProjectState(song, analysis, (video_path,), "Random", 12.75, mappings)
     project_path = tmp_path / "edit.kinebeat"
 
     save_project(project_path, state)
@@ -39,6 +47,7 @@ def test_project_round_trip_preserves_analysis_and_media_paths(tmp_path: Path) -
 
     assert restored == state
     assert '"path": "media/song.wav"' in project_path.read_text(encoding="utf-8")
+    assert restored.effect_mappings == mappings
 
 
 def test_project_loader_rejects_unrelated_json(tmp_path: Path) -> None:
@@ -47,3 +56,15 @@ def test_project_loader_rejects_unrelated_json(tmp_path: Path) -> None:
 
     with pytest.raises(ProjectFormatError, match="not a Kinebeat"):
         load_project(path)
+
+
+def test_older_project_without_mappings_receives_new_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "older.kinebeat"
+    save_project(path, ProjectState())
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("effect_mappings")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    restored = load_project(path)
+
+    assert restored.effect_mappings == DEFAULT_EFFECT_MAPPINGS

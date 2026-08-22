@@ -24,7 +24,10 @@ from PySide6.QtWidgets import (
 )
 
 from kinebeat.domain import (
+    DEFAULT_EFFECT_MAPPINGS,
+    EffectAction,
     EventKind,
+    InstrumentMapping,
     MusicalEvent,
     MusicAnalysis,
     ProjectFormatError,
@@ -41,6 +44,22 @@ from kinebeat.ui.timeline import MusicTimeline
 AUDIO_FILTER = "Music files (*.wav *.mp3 *.flac *.m4a *.aac *.ogg *.opus);;All files (*.*)"
 VIDEO_FILTER = "Video files (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mts *.m2ts);;All files (*.*)"
 PROJECT_FILTER = "Kinebeat projects (*.kinebeat);;All files (*.*)"
+INSTRUMENT_LABELS = {
+    EventKind.KICK: "KICK",
+    EventKind.SNARE: "SNARE",
+    EventKind.HI_HAT: "HI-HAT",
+    EventKind.BASS: "BASS",
+    EventKind.VOCAL: "VOCAL",
+}
+EFFECT_OPTIONS = (
+    (EffectAction.CUT, "Cut"),
+    (EffectAction.RANDOM_EFFECT, "Random effect"),
+    (EffectAction.ADD_INTENSITY, "Add more intensity"),
+    (EffectAction.ADD_AMBIANCE, "Add more ambiance"),
+    (EffectAction.LIGHT_EFFECT, "Light effect · 0.2 s"),
+    (EffectAction.TIME_BEND, "Time bend"),
+    (EffectAction.NO_ACTION, "No action"),
+)
 
 
 class MusicDropZone(QFrame):
@@ -308,33 +327,33 @@ class KinebeatWindow(QMainWindow):
         layout.addWidget(strategy_label)
         layout.addWidget(self.strategy_combo)
         layout.addSpacing(12)
-        for instrument, effect in (
-            ("KICK", "CUT + RANDOM EFFECT"),
-            ("SNARE", "CUT"),
-            ("HI-HAT", "LIGHT EFFECT · 0.2 S"),
-            ("BASS", "TIME BEND"),
-            ("VOCAL", "NO ACTION"),
-        ):
-            layout.addWidget(self._mapping_row(instrument, effect))
+        self.mapping_combos: dict[EventKind, QComboBox] = {}
+        for mapping in DEFAULT_EFFECT_MAPPINGS:
+            layout.addWidget(self._mapping_row(mapping.instrument, mapping.action))
         layout.addStretch()
         self.generate_button = QPushButton("Generate first cut")
         self.generate_button.setObjectName("primaryButton")
         layout.addWidget(self.generate_button)
         return inspector
 
-    def _mapping_row(self, instrument: str, effect: str) -> QFrame:
+    def _mapping_row(self, instrument: EventKind, default_action: EffectAction) -> QFrame:
         row = QFrame()
         row.setObjectName("mappingRow")
-        row.setMinimumHeight(54)
+        row.setMinimumHeight(68)
         layout = QVBoxLayout(row)
-        layout.setContentsMargins(0, 8, 0, 8)
-        layout.setSpacing(2)
-        instrument_label = QLabel(instrument)
+        layout.setContentsMargins(0, 7, 0, 8)
+        layout.setSpacing(5)
+        instrument_label = QLabel(INSTRUMENT_LABELS[instrument])
         instrument_label.setObjectName("mappingInstrument")
-        effect_label = QLabel(effect)
-        effect_label.setObjectName("mappingEffect")
+        effect_combo = QComboBox()
+        effect_combo.setObjectName("mappingCombo")
+        for action, label in EFFECT_OPTIONS:
+            effect_combo.addItem(label, action.value)
+        effect_combo.setCurrentIndex(effect_combo.findData(default_action.value))
+        effect_combo.currentIndexChanged.connect(self._mapping_changed)
+        self.mapping_combos[instrument] = effect_combo
         layout.addWidget(instrument_label)
-        layout.addWidget(effect_label)
+        layout.addWidget(effect_combo)
         return row
 
     def _build_task_bar(self) -> QFrame:
@@ -421,6 +440,10 @@ class KinebeatWindow(QMainWindow):
             video_paths=self._video_paths,
             footage_strategy=self.strategy_combo.currentText(),
             playhead_seconds=self.timeline.position_seconds,
+            effect_mappings=tuple(
+                InstrumentMapping(instrument, EffectAction(combo.currentData()))
+                for instrument, combo in self.mapping_combos.items()
+            ),
         )
 
     def _apply_project(self, path: Path, state: ProjectState) -> None:
@@ -432,6 +455,15 @@ class KinebeatWindow(QMainWindow):
         self._project_path = path.resolve()
         strategy_index = self.strategy_combo.findText(state.footage_strategy)
         self.strategy_combo.setCurrentIndex(max(0, strategy_index))
+        for default in DEFAULT_EFFECT_MAPPINGS:
+            combo = self.mapping_combos[default.instrument]
+            combo.setCurrentIndex(combo.findData(default.action.value))
+        for mapping in state.effect_mappings:
+            combo = self.mapping_combos.get(mapping.instrument)
+            if combo is not None:
+                action_index = combo.findData(mapping.action.value)
+                if action_index >= 0:
+                    combo.setCurrentIndex(action_index)
         self._loading_project = False
 
         if self._song:
@@ -533,6 +565,11 @@ class KinebeatWindow(QMainWindow):
 
     @Slot(str)
     def _strategy_changed(self, _strategy: str) -> None:
+        if not self._loading_project and self._analysis:
+            self._set_dirty(True)
+
+    @Slot()
+    def _mapping_changed(self) -> None:
         if not self._loading_project and self._analysis:
             self._set_dirty(True)
 
@@ -734,6 +771,8 @@ class KinebeatWindow(QMainWindow):
         self.analyse_button.setEnabled(self._song is not None and not busy)
         self.footage_button.setEnabled(self._analysis is not None and not busy)
         self.strategy_combo.setEnabled(self._analysis is not None and not busy)
+        for combo in self.mapping_combos.values():
+            combo.setEnabled(self._analysis is not None and not busy)
         self.generate_button.setEnabled(
             self._analysis is not None and bool(self._video_paths) and not busy
         )

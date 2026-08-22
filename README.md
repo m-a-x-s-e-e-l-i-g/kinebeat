@@ -23,8 +23,9 @@ Actions.
 
 The current runnable slice covers local music import, waveform extraction, automatic
 six-stem separation through Demucs, musical-event detection, multi-clip video import,
-music playback with timeline seeking, and versioned `.kinebeat` project save/load.
-Media remains external to the small project document. See
+editable per-instrument action mappings, music playback with timeline seeking, and
+versioned `.kinebeat` project save/load. Media remains external to the small project
+document. See
 [the confirmed design brief](docs/DESIGN_BRIEF.md).
 
 ## Development

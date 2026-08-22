@@ -8,7 +8,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
-from kinebeat.domain import ProjectState
+from kinebeat.domain import EffectAction, EventKind, InstrumentMapping, ProjectState
 from kinebeat.ui.window import KinebeatWindow
 
 
@@ -37,6 +37,10 @@ def test_demo_analysis_unlocks_footage_but_not_generation() -> None:
     assert window.strategy_combo.isEnabled() is True
     assert window.generate_button.isEnabled() is False
     assert "EVENTS" in window.timeline_meta.text()
+    assert window.mapping_combos[EventKind.KICK].currentData() == EffectAction.CUT.value
+    assert window.mapping_combos[EventKind.SNARE].currentData() == EffectAction.RANDOM_EFFECT.value
+    assert window.mapping_combos[EventKind.BASS].currentData() == EffectAction.ADD_INTENSITY.value
+    assert window.mapping_combos[EventKind.VOCAL].currentData() == EffectAction.ADD_AMBIANCE.value
     window.close()
 
 
@@ -73,6 +77,10 @@ def test_project_application_restores_timeline_and_strategy(tmp_path, monkeypatc
         video_paths=(tmp_path / "clip.mp4",),
         footage_strategy="Least used first",
         playhead_seconds=42.5,
+        effect_mappings=(
+            InstrumentMapping(EventKind.KICK, EffectAction.TIME_BEND),
+            InstrumentMapping(EventKind.SNARE, EffectAction.NO_ACTION),
+        ),
     )
 
     window._apply_project(tmp_path / "restored.kinebeat", state)
@@ -81,6 +89,24 @@ def test_project_application_restores_timeline_and_strategy(tmp_path, monkeypatc
     assert window.timeline.position_seconds == 42.5
     assert window.timecode_label.text() == "0:42 / 2:54"
     assert window.generate_button.isEnabled() is True
+    assert window.mapping_combos[EventKind.KICK].currentData() == EffectAction.TIME_BEND.value
+    assert window.mapping_combos[EventKind.SNARE].currentData() == EffectAction.NO_ACTION.value
+    window.close()
+
+
+def test_mapping_selector_updates_project_state() -> None:
+    _app()
+    window = KinebeatWindow()
+    window.load_demo_state()
+    snare = window.mapping_combos[EventKind.SNARE]
+
+    snare.setCurrentIndex(snare.findData(EffectAction.ADD_AMBIANCE.value))
+
+    mapping_by_instrument = {
+        mapping.instrument: mapping.action for mapping in window._project_state().effect_mappings
+    }
+    assert mapping_by_instrument[EventKind.SNARE] is EffectAction.ADD_AMBIANCE
+    assert window.isWindowModified() is True
     window.close()
 
 
