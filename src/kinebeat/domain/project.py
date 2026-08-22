@@ -17,6 +17,7 @@ from kinebeat.domain.music import (
     SongMetadata,
     StemArtifact,
 )
+from kinebeat.domain.timeline import GeneratedTimeline, TimelineClip
 
 PROJECT_FORMAT = "kinebeat-project"
 PROJECT_VERSION = 1
@@ -34,10 +35,13 @@ class ProjectState:
     footage_strategy: str = "Movement based"
     playhead_seconds: float = 0.0
     effect_mappings: tuple[InstrumentMapping, ...] = DEFAULT_EFFECT_MAPPINGS
+    generated_timeline: GeneratedTimeline | None = None
 
     def __post_init__(self) -> None:
         if self.analysis and not self.song:
             raise ValueError("analysis requires a song")
+        if self.generated_timeline and not self.analysis:
+            raise ValueError("generated_timeline requires analysis")
         if self.playhead_seconds < 0:
             raise ValueError("playhead_seconds must be non-negative")
 
@@ -124,6 +128,23 @@ def _state_to_dict(state: ProjectState, base: Path) -> dict[str, Any]:
             {"instrument": mapping.instrument.value, "action": mapping.action.value}
             for mapping in state.effect_mappings
         ],
+        "generated_timeline": (
+            {
+                "seed": state.generated_timeline.seed,
+                "clips": [
+                    {
+                        "source_path": _store_path(clip.source_path, base),
+                        "timeline_start_seconds": clip.timeline_start_seconds,
+                        "timeline_end_seconds": clip.timeline_end_seconds,
+                        "source_start_seconds": clip.source_start_seconds,
+                        "locked": clip.locked,
+                    }
+                    for clip in state.generated_timeline.clips
+                ],
+            }
+            if state.generated_timeline
+            else None
+        ),
     }
 
 
@@ -160,6 +181,22 @@ def _state_from_dict(payload: dict[str, Any], base: Path) -> ProjectState:
             ),
             model_name=str(analysis_payload["model_name"]),
         )
+    timeline_payload = payload.get("generated_timeline")
+    generated_timeline = None
+    if timeline_payload is not None:
+        generated_timeline = GeneratedTimeline(
+            clips=tuple(
+                TimelineClip(
+                    source_path=_restore_path(clip["source_path"], base),
+                    timeline_start_seconds=float(clip["timeline_start_seconds"]),
+                    timeline_end_seconds=float(clip["timeline_end_seconds"]),
+                    source_start_seconds=float(clip.get("source_start_seconds", 0.0)),
+                    locked=bool(clip.get("locked", False)),
+                )
+                for clip in timeline_payload.get("clips", [])
+            ),
+            seed=int(timeline_payload["seed"]),
+        )
     return ProjectState(
         song=song,
         analysis=analysis,
@@ -179,6 +216,7 @@ def _state_from_dict(payload: dict[str, Any], base: Path) -> ProjectState:
                 ],
             )
         ),
+        generated_timeline=generated_timeline,
     )
 
 

@@ -4,7 +4,13 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
-from kinebeat.domain import EventKind, MusicalEvent, MusicAnalysis, SongMetadata
+from kinebeat.domain import (
+    EventKind,
+    GeneratedTimeline,
+    MusicalEvent,
+    MusicAnalysis,
+    SongMetadata,
+)
 
 
 class MusicTimeline(QWidget):
@@ -35,9 +41,10 @@ class MusicTimeline(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("musicTimeline")
-        self.setMinimumHeight(230)
+        self.setMinimumHeight(270)
         self._song: SongMetadata | None = None
         self._events: tuple[MusicalEvent, ...] = ()
+        self._first_cut: GeneratedTimeline | None = None
         self._position_seconds = 0.0
 
     @property
@@ -47,12 +54,17 @@ class MusicTimeline(QWidget):
     def set_song(self, song: SongMetadata | None) -> None:
         self._song = song
         self._events = ()
+        self._first_cut = None
         self._position_seconds = 0.0
         self.update()
 
     def set_analysis(self, analysis: MusicAnalysis | None) -> None:
         self._song = analysis.song if analysis else self._song
         self._events = analysis.events if analysis else ()
+        self.update()
+
+    def set_first_cut(self, first_cut: GeneratedTimeline | None) -> None:
+        self._first_cut = first_cut
         self.update()
 
     def set_position(self, seconds: float) -> None:
@@ -84,6 +96,15 @@ class MusicTimeline(QWidget):
         self._paint_grid(painter, content)
         self._paint_waveform(painter, content)
         lane_top = top + waveform_height + 12
+        edit_height = 38.0
+        edit_lane = QRectF(
+            label_width,
+            lane_top,
+            self.width() - label_width - 12,
+            edit_height,
+        )
+        self._paint_edit_lane(painter, edit_lane)
+        lane_top += edit_height + 8
         lane_height = max(24.0, (self.height() - lane_top - 10) / len(self.lane_order))
         for index, kind in enumerate(self.lane_order):
             lane = QRectF(
@@ -94,6 +115,46 @@ class MusicTimeline(QWidget):
             )
             self._paint_lane(painter, kind, lane)
         self._paint_playhead(painter, content)
+
+    def _paint_edit_lane(self, painter: QPainter, rect: QRectF) -> None:
+        painter.setPen(QColor("#747974"))
+        painter.setFont(QFont("Bahnschrift", 8, QFont.Weight.DemiBold))
+        painter.drawText(
+            QRectF(12, rect.top(), 56, rect.height()),
+            Qt.AlignmentFlag.AlignVCenter,
+            "EDIT",
+        )
+        painter.setPen(QPen(QColor("#30332f"), 1))
+        painter.setBrush(QColor("#121412"))
+        painter.drawRect(rect)
+        if not self._first_cut or not self._song or self._song.duration_seconds <= 0:
+            painter.setPen(QColor("#636763"))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "GENERATE A FIRST CUT")
+            return
+
+        duration = self._song.duration_seconds
+        for index, clip in enumerate(self._first_cut.clips):
+            left = rect.left() + rect.width() * clip.timeline_start_seconds / duration
+            right = rect.left() + rect.width() * clip.timeline_end_seconds / duration
+            clip_rect = QRectF(
+                left + 0.5, rect.top() + 3, max(1.5, right - left - 1), rect.height() - 6
+            )
+            painter.setPen(QPen(QColor("#b8bbb5"), 1))
+            painter.setBrush(QColor("#4b514a") if index % 2 else QColor("#626960"))
+            painter.drawRect(clip_rect)
+            if clip_rect.width() >= 34:
+                painter.setPen(QColor("#f0f2ed"))
+                painter.setFont(QFont("Bahnschrift", 7))
+                label = painter.fontMetrics().elidedText(
+                    clip.source_path.stem,
+                    Qt.TextElideMode.ElideRight,
+                    max(1, round(clip_rect.width() - 8)),
+                )
+                painter.drawText(
+                    clip_rect.adjusted(4, 0, -4, 0),
+                    Qt.AlignmentFlag.AlignVCenter,
+                    label,
+                )
 
     def _paint_grid(self, painter: QPainter, rect: QRectF) -> None:
         painter.setPen(QPen(QColor("#292b29"), 1))

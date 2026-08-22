@@ -16,11 +16,13 @@ from kinebeat.domain.project import (
     load_project,
     save_project,
 )
+from kinebeat.domain.timeline import GeneratedTimeline, TimelineClip
 
 __all__ = [
     "DEFAULT_EFFECT_MAPPINGS",
     "EffectAction",
     "EventKind",
+    "GeneratedTimeline",
     "InstrumentMapping",
     "MusicAnalysis",
     "MusicalEvent",
@@ -28,6 +30,7 @@ __all__ = [
     "ProjectState",
     "SongMetadata",
     "StemArtifact",
+    "TimelineClip",
     "load_project",
     "save_project",
 ]

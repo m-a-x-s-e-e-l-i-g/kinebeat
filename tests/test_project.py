@@ -7,6 +7,7 @@ from kinebeat.domain import (
     DEFAULT_EFFECT_MAPPINGS,
     EffectAction,
     EventKind,
+    GeneratedTimeline,
     InstrumentMapping,
     MusicalEvent,
     MusicAnalysis,
@@ -14,6 +15,7 @@ from kinebeat.domain import (
     ProjectState,
     SongMetadata,
     StemArtifact,
+    TimelineClip,
     load_project,
     save_project,
 )
@@ -39,7 +41,19 @@ def test_project_round_trip_preserves_analysis_and_media_paths(tmp_path: Path) -
         InstrumentMapping(EventKind.KICK, EffectAction.RANDOM_EFFECT),
         InstrumentMapping(EventKind.BASS, EffectAction.ADD_INTENSITY),
     )
-    state = ProjectState(song, analysis, (video_path,), "Random", 12.75, mappings)
+    generated_timeline = GeneratedTimeline(
+        (TimelineClip(video_path, 0.0, 1.25), TimelineClip(video_path, 1.25, 63.5, locked=True)),
+        seed=782,
+    )
+    state = ProjectState(
+        song,
+        analysis,
+        (video_path,),
+        "Random",
+        12.75,
+        mappings,
+        generated_timeline,
+    )
     project_path = tmp_path / "edit.kinebeat"
 
     save_project(project_path, state)
@@ -48,6 +62,7 @@ def test_project_round_trip_preserves_analysis_and_media_paths(tmp_path: Path) -
     assert restored == state
     assert '"path": "media/song.wav"' in project_path.read_text(encoding="utf-8")
     assert restored.effect_mappings == mappings
+    assert restored.generated_timeline == generated_timeline
 
 
 def test_project_loader_rejects_unrelated_json(tmp_path: Path) -> None:
