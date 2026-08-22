@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QMessageBox
 
 from kinebeat.domain import EffectAction, EventKind, InstrumentMapping, ProjectState
 from kinebeat.ui.window import KinebeatWindow
@@ -24,6 +24,7 @@ def test_first_run_guides_song_first_flow() -> None:
     assert window.footage_button.isEnabled() is False
     assert window.generate_button.isEnabled() is False
     assert window.preview_title.text() == "Your song sets\nthe timeline."
+    assert all(label.text() != "LOCAL PROCESSING" for label in window.findChildren(QLabel))
     window.close()
 
 

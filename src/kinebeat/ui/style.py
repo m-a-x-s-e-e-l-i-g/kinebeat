@@ -26,16 +26,6 @@ QLabel#strapline, QLabel#eyebrow, QLabel#fieldLabel {
     font-weight: 600;
     letter-spacing: 1.4px;
 }
-QLabel#privacyBadge {
-    color: #c8cbc5;
-    background: #151715;
-    border: 1px solid #454944;
-    border-radius: 2px;
-    padding: 5px 9px;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 1px;
-}
 QFrame#setupRail {
     background: #0e0f0e;
     border-right: 1px solid #30332f;

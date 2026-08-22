@@ -175,8 +175,6 @@ class KinebeatWindow(QMainWindow):
         wordmark.setObjectName("wordmark")
         strapline = QLabel("MUSIC BUILDS THE CUT")
         strapline.setObjectName("strapline")
-        privacy = QLabel("LOCAL PROCESSING")
-        privacy.setObjectName("privacyBadge")
         layout.addWidget(wordmark)
         layout.addWidget(strapline)
         layout.addStretch()
@@ -190,7 +188,6 @@ class KinebeatWindow(QMainWindow):
         self.save_project_button.clicked.connect(self._save_project)
         layout.addWidget(self.open_project_button)
         layout.addWidget(self.save_project_button)
-        layout.addWidget(privacy)
         return header
 
     def _build_setup_rail(self) -> QFrame:
