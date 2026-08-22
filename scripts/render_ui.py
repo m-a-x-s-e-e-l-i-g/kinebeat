@@ -16,7 +16,7 @@ from kinebeat.ui.window import KinebeatWindow
 def main() -> int:
     parser = argparse.ArgumentParser(description="Render a Kinebeat UI verification image.")
     parser.add_argument("output", type=Path)
-    parser.add_argument("--state", choices=("empty", "analysed"), default="analysed")
+    parser.add_argument("--state", choices=("empty", "analysed", "saved"), default="analysed")
     args = parser.parse_args()
     app = QApplication([])
     font = load_application_font()
@@ -24,8 +24,10 @@ def main() -> int:
     app.setStyleSheet(application_stylesheet(font))
     window = KinebeatWindow()
     window.resize(1480, 900)
-    if args.state == "analysed":
+    if args.state in ("analysed", "saved"):
         window.load_demo_state()
+    if args.state == "saved":
+        window._show_save_feedback()
     window.show()
 
     def capture() -> None:

@@ -125,3 +125,42 @@ def test_clicking_timeline_moves_playhead() -> None:
     assert 86.5 < window.timeline.position_seconds < 87.5
     assert window.timecode_label.text() == "1:27 / 2:54"
     window.close()
+
+
+def test_save_feedback_has_reduced_motion_fallback(tmp_path) -> None:
+    _app()
+    window = KinebeatWindow(animations_enabled=False)
+    window.load_demo_state()
+    window._project_path = tmp_path / "edit.kinebeat"
+
+    window._save_project()
+
+    assert window.save_project_button.text() == "Saved"
+    assert window.save_project_button.property("saveState") == "saved"
+    assert window._save_feedback_effect.opacity() == 1.0
+
+    window._begin_save_feedback_reset()
+
+    assert window.save_project_button.text() == "Save project"
+    assert window.save_project_button.property("saveState") == "idle"
+    window.close()
+
+
+def test_save_feedback_animates_and_returns_to_idle(tmp_path) -> None:
+    _app()
+    window = KinebeatWindow(animations_enabled=True)
+    window.load_demo_state()
+    window._project_path = tmp_path / "edit.kinebeat"
+
+    window._save_project()
+    QTest.qWait(260)
+
+    assert window.save_project_button.text() == "Saved"
+    assert window._save_feedback_effect.opacity() > 0.99
+
+    window._begin_save_feedback_reset()
+    QTest.qWait(300)
+
+    assert window.save_project_button.text() == "Save project"
+    assert window._save_feedback_effect.opacity() > 0.99
+    window.close()

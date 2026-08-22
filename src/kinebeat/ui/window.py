@@ -5,13 +5,25 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QStandardPaths, Qt, QThread, QUrl, Signal, Slot
+from PySide6.QtCore import (
+    QEasingCurve,
+    QPropertyAnimation,
+    QStandardPaths,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFileDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -106,7 +118,7 @@ class MusicDropZone(QFrame):
 
 
 class KinebeatWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, *, animations_enabled: bool | None = None) -> None:
         super().__init__()
         self.setWindowTitle("Kinebeat")
         self.resize(1480, 900)
@@ -118,9 +130,16 @@ class KinebeatWindow(QMainWindow):
         self._dirty = False
         self._loading_project = False
         self._pending_playhead_seconds = 0.0
+        self._animations_enabled = (
+            QApplication.isEffectEnabled(Qt.UIEffect.UI_AnimateCombo)
+            if animations_enabled is None
+            else animations_enabled
+        )
+        self._save_feedback_animation: QPropertyAnimation | None = None
         self._task_thread: QThread | None = None
         self._task_worker: TaskWorker | None = None
         self._build_ui()
+        self._setup_save_feedback()
         self._setup_playback()
         self._setup_shortcuts()
         self._update_window_title()
@@ -166,6 +185,8 @@ class KinebeatWindow(QMainWindow):
         self.open_project_button.clicked.connect(self._open_project)
         self.save_project_button = QPushButton("Save project")
         self.save_project_button.setObjectName("quietButton")
+        self.save_project_button.setProperty("saveState", "idle")
+        self.save_project_button.setFixedWidth(112)
         self.save_project_button.clicked.connect(self._save_project)
         layout.addWidget(self.open_project_button)
         layout.addWidget(self.save_project_button)
@@ -394,6 +415,14 @@ class KinebeatWindow(QMainWindow):
         self.media_player.playbackStateChanged.connect(self._playback_state_changed)
         self.media_player.mediaStatusChanged.connect(self._media_status_changed)
 
+    def _setup_save_feedback(self) -> None:
+        self._save_feedback_effect = QGraphicsOpacityEffect(self.save_project_button)
+        self._save_feedback_effect.setOpacity(1.0)
+        self.save_project_button.setGraphicsEffect(self._save_feedback_effect)
+        self._save_feedback_timer = QTimer(self)
+        self._save_feedback_timer.setSingleShot(True)
+        self._save_feedback_timer.timeout.connect(self._begin_save_feedback_reset)
+
     def _setup_shortcuts(self) -> None:
         QShortcut(QKeySequence.StandardKey.Open, self, activated=self._open_project)
         QShortcut(QKeySequence.StandardKey.Save, self, activated=self._save_project)
@@ -430,8 +459,78 @@ class KinebeatWindow(QMainWindow):
             return
         self._project_path = path.resolve()
         self._set_dirty(False)
+        self._show_save_feedback()
         self.task_title.setText("PROJECT SAVED")
         self.task_detail.setText(str(self._project_path))
+
+    def _show_save_feedback(self) -> None:
+        self._save_feedback_timer.stop()
+        self._stop_save_feedback_animation()
+        self._set_save_button_state("Saved", "saved")
+        if self._animations_enabled:
+            self._save_feedback_effect.setOpacity(0.45)
+            self._animate_save_opacity(0.45, 1.0, 220)
+        else:
+            self._save_feedback_effect.setOpacity(1.0)
+        self._save_feedback_timer.start(1400)
+
+    @Slot()
+    def _begin_save_feedback_reset(self) -> None:
+        self._stop_save_feedback_animation()
+        if not self._animations_enabled:
+            self._restore_save_button()
+            return
+        self._animate_save_opacity(
+            self._save_feedback_effect.opacity(),
+            0.55,
+            90,
+            self._restore_save_button_animated,
+        )
+
+    def _restore_save_button_animated(self) -> None:
+        self._set_save_button_state("Save project", "idle")
+        self._animate_save_opacity(0.55, 1.0, 150)
+
+    def _restore_save_button(self) -> None:
+        self._stop_save_feedback_animation()
+        self._set_save_button_state("Save project", "idle")
+        self._save_feedback_effect.setOpacity(1.0)
+
+    def _set_save_button_state(self, text: str, state: str) -> None:
+        self.save_project_button.setText(text)
+        self.save_project_button.setAccessibleName(text)
+        self.save_project_button.setProperty("saveState", state)
+        self.save_project_button.style().unpolish(self.save_project_button)
+        self.save_project_button.style().polish(self.save_project_button)
+
+    def _animate_save_opacity(
+        self,
+        start: float,
+        end: float,
+        duration_ms: int,
+        on_finished: Callable[[], None] | None = None,
+    ) -> None:
+        animation = QPropertyAnimation(self._save_feedback_effect, b"opacity", self)
+        animation.setStartValue(start)
+        animation.setEndValue(end)
+        animation.setDuration(duration_ms)
+        animation.setEasingCurve(QEasingCurve.Type.OutQuart)
+        if on_finished:
+            animation.finished.connect(on_finished)
+        animation.finished.connect(lambda: self._forget_save_feedback_animation(animation))
+        self._save_feedback_animation = animation
+        animation.start()
+
+    def _forget_save_feedback_animation(self, animation: QPropertyAnimation) -> None:
+        if self._save_feedback_animation is animation:
+            self._save_feedback_animation = None
+        animation.deleteLater()
+
+    def _stop_save_feedback_animation(self) -> None:
+        if self._save_feedback_animation is not None:
+            self._save_feedback_animation.stop()
+            self._save_feedback_animation.deleteLater()
+            self._save_feedback_animation = None
 
     def _project_state(self) -> ProjectState:
         return ProjectState(

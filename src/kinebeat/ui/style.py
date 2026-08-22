@@ -107,6 +107,11 @@ QPushButton#secondaryButton:hover, QPushButton#quietButton:hover {
     background: #202320;
     border-color: #858a84;
 }
+QPushButton#quietButton[saveState="saved"] {
+    color: #101510;
+    background: #cbdcc8;
+    border-color: #cbdcc8;
+}
 QPushButton:focus { border: 1px solid #f2f4ee; }
 QPushButton:disabled {
     color: #555a54;
