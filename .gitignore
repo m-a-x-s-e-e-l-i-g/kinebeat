@@ -1,0 +1,13 @@
+.venv/
+.venv-posix/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+release/
+*.egg-info/
+*.partial
+*.partial.*
+*.kinebeat-cache/
