@@ -9,6 +9,7 @@ from typing import Any
 from PySide6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
+    QRect,
     QStandardPaths,
     Qt,
     QThread,
@@ -17,9 +18,8 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtMultimediaWidgets import QVideoWidget
+from PySide6.QtGui import QImage, QKeySequence, QPainter, QShortcut
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoFrame, QVideoSink
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -124,6 +124,44 @@ class MusicDropZone(QFrame):
         self.setProperty("dragActive", active)
         self.style().unpolish(self)
         self.style().polish(self)
+
+
+class VideoPreviewCanvas(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("videoPreview")
+        self._image: QImage | None = None
+        self.video_sink = QVideoSink(self)
+        self.video_sink.videoFrameChanged.connect(self._frame_changed)
+
+    def clear(self) -> None:
+        self._image = None
+        self.update()
+
+    @Slot(QVideoFrame)
+    def _frame_changed(self, frame: QVideoFrame) -> None:
+        if not frame.isValid():
+            return
+        image = frame.toImage()
+        if image.isNull():
+            return
+        self._image = image.copy()
+        self.update()
+
+    def paintEvent(self, _event: Any) -> None:
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), Qt.GlobalColor.black)
+        if self._image is None:
+            return
+        target_size = self._image.size().scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio)
+        target = QRect(
+            (self.width() - target_size.width()) // 2,
+            (self.height() - target_size.height()) // 2,
+            target_size.width(),
+            target_size.height(),
+        )
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawImage(target, self._image)
 
 
 class KinebeatWindow(QMainWindow):
@@ -297,9 +335,7 @@ class KinebeatWindow(QMainWindow):
         message_layout.addSpacing(6)
         message_layout.addWidget(self.preview_body)
         message_layout.addStretch()
-        self.video_widget = QVideoWidget()
-        self.video_widget.setObjectName("videoPreview")
-        self.video_widget.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+        self.video_widget = VideoPreviewCanvas()
         self.preview_stack.addWidget(preview_message)
         self.preview_stack.addWidget(self.video_widget)
         preview_layout.addWidget(self.preview_stack)
@@ -436,9 +472,13 @@ class KinebeatWindow(QMainWindow):
         self.media_player.playbackStateChanged.connect(self._playback_state_changed)
         self.media_player.mediaStatusChanged.connect(self._media_status_changed)
         self.video_player = QMediaPlayer(self)
-        self.video_player.setVideoOutput(self.video_widget)
+        self.video_player.setVideoSink(self.video_widget.video_sink)
         self.video_player.mediaStatusChanged.connect(self._video_media_status_changed)
         self.video_player.errorOccurred.connect(self._video_playback_failed)
+        self._video_sync_timer = QTimer(self)
+        self._video_sync_timer.setSingleShot(True)
+        self._video_sync_timer.setInterval(1500)
+        self._video_sync_timer.timeout.connect(self._sync_video_once)
 
     def _setup_save_feedback(self) -> None:
         self._save_feedback_effect = QGraphicsOpacityEffect(self.save_project_button)
@@ -757,15 +797,18 @@ class KinebeatWindow(QMainWindow):
             )
             return
         if self.media_player.playbackState() is QMediaPlayer.PlaybackState.PlayingState:
+            self._video_sync_timer.stop()
             self.media_player.pause()
             self.video_player.pause()
         else:
             if self.timeline.position_seconds >= self._song.duration_seconds - 0.05:
                 self._seek_timeline(0.0)
             if self._preview_path:
-                self.video_player.setPosition(round(self.timeline.position_seconds * 1000))
+                self._set_video_position(round(self.timeline.position_seconds * 1000))
                 self.video_player.play()
             self.media_player.play()
+            if self._preview_path:
+                self._video_sync_timer.start()
 
     @Slot(float)
     def _seek_timeline(self, seconds: float) -> None:
@@ -775,14 +818,28 @@ class KinebeatWindow(QMainWindow):
         if self._song and self._song.path.is_file():
             self.media_player.setPosition(round(seconds * 1000))
         if self._preview_path:
-            self.video_player.setPosition(round(seconds * 1000))
+            self._set_video_position(round(seconds * 1000))
 
     @Slot(int)
     def _playback_position_changed(self, milliseconds: int) -> None:
         seconds = milliseconds / 1000.0
         self.timeline.set_position(seconds)
         self._update_timecode(seconds)
-        if self._preview_path and abs(self.video_player.position() - milliseconds) > 180:
+
+    @Slot()
+    def _sync_video_once(self) -> None:
+        if (
+            not self._preview_path
+            or self.media_player.playbackState() is not QMediaPlayer.PlaybackState.PlayingState
+            or self.video_player.playbackState() is not QMediaPlayer.PlaybackState.PlayingState
+        ):
+            return
+        audio_position = self.media_player.position()
+        if abs(self.video_player.position() - audio_position) > 750:
+            self.video_player.setPosition(audio_position)
+
+    def _set_video_position(self, milliseconds: int) -> None:
+        if abs(self.video_player.position() - milliseconds) > 40:
             self.video_player.setPosition(milliseconds)
 
     @Slot(QMediaPlayer.PlaybackState)
@@ -795,8 +852,10 @@ class KinebeatWindow(QMainWindow):
         if state is QMediaPlayer.PlaybackState.PlayingState:
             self.video_player.play()
         elif state is QMediaPlayer.PlaybackState.PausedState:
+            self._video_sync_timer.stop()
             self.video_player.pause()
         else:
+            self._video_sync_timer.stop()
             self.video_player.stop()
 
     @Slot(QMediaPlayer.MediaStatus)
@@ -813,10 +872,11 @@ class KinebeatWindow(QMainWindow):
             QMediaPlayer.MediaStatus.LoadedMedia,
             QMediaPlayer.MediaStatus.BufferedMedia,
         ):
-            self.video_player.setPosition(round(self._pending_playhead_seconds * 1000))
+            self._set_video_position(round(self._pending_playhead_seconds * 1000))
             self.preview_stack.setCurrentIndex(1)
             if self.media_player.playbackState() is QMediaPlayer.PlaybackState.PlayingState:
                 self.video_player.play()
+                self._video_sync_timer.start()
 
     @Slot(object, str)
     def _video_playback_failed(self, _error: object, message: str) -> None:
@@ -839,11 +899,12 @@ class KinebeatWindow(QMainWindow):
 
     def _set_video_preview_source(self, path: Path | None, position_seconds: float = 0.0) -> None:
         self.video_player.stop()
+        self.video_widget.clear()
         self._preview_path = path.resolve() if path else None
         self._pending_playhead_seconds = position_seconds
         if self._preview_path and self._preview_path.is_file():
             self.video_player.setSource(QUrl.fromLocalFile(str(self._preview_path)))
-            self.video_player.setPosition(round(position_seconds * 1000))
+            self._set_video_position(round(position_seconds * 1000))
             self.preview_stack.setCurrentIndex(1)
         else:
             self.video_player.setSource(QUrl())

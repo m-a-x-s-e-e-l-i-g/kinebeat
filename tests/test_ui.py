@@ -223,6 +223,20 @@ def test_clicking_timeline_moves_playhead() -> None:
     window.close()
 
 
+def test_aligned_video_position_does_not_trigger_redundant_seek(monkeypatch) -> None:
+    _app()
+    window = KinebeatWindow()
+    seeks: list[int] = []
+    monkeypatch.setattr(window.video_player, "position", lambda: 0)
+    monkeypatch.setattr(window.video_player, "setPosition", seeks.append)
+
+    window._set_video_position(0)
+    window._set_video_position(1000)
+
+    assert seeks == [1000]
+    window.close()
+
+
 def test_save_feedback_has_reduced_motion_fallback(tmp_path) -> None:
     _app()
     window = KinebeatWindow(animations_enabled=False)
