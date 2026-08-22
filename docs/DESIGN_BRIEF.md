@@ -1,6 +1,6 @@
 # Kinebeat design brief
 
-Status: draft awaiting confirmation
+Status: confirmed on 2026-08-22
 
 ## 1. Feature summary
 

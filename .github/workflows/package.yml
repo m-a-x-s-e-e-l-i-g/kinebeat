@@ -1,0 +1,39 @@
+name: Package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Linux desktop runtime
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes libegl1 libxcb-cursor0 libxkbcommon-x11-0
+      - name: Install project
+        run: python -m pip install -e ".[dev,build]"
+      - name: Verify
+        run: python -m pytest -q
+      - name: Package
+        run: python -m PyInstaller --noconfirm --clean kinebeat.spec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kinebeat-${{ runner.os }}
+          path: dist/Kinebeat
+          if-no-files-found: error

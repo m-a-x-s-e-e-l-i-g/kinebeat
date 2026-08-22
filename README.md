@@ -21,8 +21,30 @@ Actions.
 
 ## Status
 
-Product discovery and repository foundation. See
-[the draft design brief](docs/DESIGN_BRIEF.md).
+The first runnable slice covers local music import, waveform extraction, automatic
+six-stem separation through Demucs, musical-event detection, and a timeline-ready
+immutable analysis model. See [the confirmed design brief](docs/DESIGN_BRIEF.md).
+
+## Development
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m kinebeat
+```
+
+The larger analysis runtime is optional during UI development:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[analysis,dev]"
+```
+
+The first analysis downloads the selected Demucs model. After that, separation and
+event detection run locally.
+
+Build a development package with `build.bat` on Windows or `./build.sh` on macOS and
+Linux. The current package contains the editor foundation; bundling the much larger
+analysis runtime will be qualified separately before the first release.
 
 ## License
 
