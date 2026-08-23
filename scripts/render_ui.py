@@ -20,19 +20,21 @@ def main() -> int:
     parser.add_argument("output", type=Path)
     parser.add_argument(
         "--state",
-        choices=("empty", "analysed", "generated", "broken", "saved"),
+        choices=("empty", "analysed", "generated", "vertical", "broken", "saved"),
         default="analysed",
     )
+    parser.add_argument("--width", type=int, default=1480)
+    parser.add_argument("--height", type=int, default=900)
     args = parser.parse_args()
     app = QApplication([])
     font = load_application_font()
     app.setFont(font)
     app.setStyleSheet(application_stylesheet(font))
     window = KinebeatWindow()
-    window.resize(1480, 900)
-    if args.state in ("analysed", "generated", "broken", "saved"):
+    window.resize(args.width, args.height)
+    if args.state in ("analysed", "generated", "vertical", "broken", "saved"):
         window.load_demo_state()
-    if args.state in ("generated", "broken"):
+    if args.state in ("generated", "vertical", "broken"):
         window._video_paths = (
             Path("city-wide-establishing-shot.mp4"),
             Path("close-motion.mp4"),
@@ -50,8 +52,11 @@ def main() -> int:
                 continue
             thumbnail = QImage(72, 45, QImage.Format.Format_RGB888)
             thumbnail.fill(QColor(color))
-            window._media_thumbnail_ready(row.path, thumbnail)
-        if args.state == "generated":
+            if args.state == "vertical":
+                window._media_thumbnail_ready(row.path, thumbnail, 1.0, 1080, 1920)
+            else:
+                window._media_thumbnail_ready(row.path, thumbnail)
+        if args.state in ("generated", "vertical"):
             result = generate_first_cut(
                 window._analysis,
                 window._video_paths,

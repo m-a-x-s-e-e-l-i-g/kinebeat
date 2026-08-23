@@ -17,6 +17,8 @@ from kinebeat.processing.preview_renderer import (
 class VideoMediaCheck:
     thumbnail: np.ndarray
     duration_seconds: float
+    source_width: int = 1920
+    source_height: int = 1080
 
 
 def inspect_video_media(
@@ -57,7 +59,12 @@ def inspect_video_media(
                     break
             if selected is None:
                 raise ValueError(_unreadable_video_message(source))
-            return VideoMediaCheck(_cover_frame(selected, width, height), duration)
+            return VideoMediaCheck(
+                _cover_frame(selected, width, height),
+                duration,
+                selected.width,
+                selected.height,
+            )
     except av.error.FFmpegError as error:
         raise ValueError(_unreadable_video_message(source, error)) from error
 

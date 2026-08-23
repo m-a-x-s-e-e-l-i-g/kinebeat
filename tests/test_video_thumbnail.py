@@ -45,6 +45,7 @@ def test_video_media_check_returns_usable_duration(tmp_path: Path) -> None:
     result = inspect_video_media(source)
 
     assert result.duration_seconds == 2.0
+    assert (result.source_width, result.source_height) == (96, 54)
     assert result.thumbnail.shape == (45, 72, 3)
 
 

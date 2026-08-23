@@ -17,6 +17,7 @@ from kinebeat.domain.music import (
     SongMetadata,
     StemArtifact,
 )
+from kinebeat.domain.output import OutputFormat
 from kinebeat.domain.timeline import GeneratedTimeline, TimelineClip
 
 PROJECT_FORMAT = "kinebeat-project"
@@ -36,6 +37,7 @@ class ProjectState:
     playhead_seconds: float = 0.0
     effect_mappings: tuple[InstrumentMapping, ...] = DEFAULT_EFFECT_MAPPINGS
     generated_timeline: GeneratedTimeline | None = None
+    output_format: OutputFormat = OutputFormat.AUTO
 
     def __post_init__(self) -> None:
         if self.analysis and not self.song:
@@ -123,6 +125,7 @@ def _state_to_dict(state: ProjectState, base: Path) -> dict[str, Any]:
         ),
         "video_paths": [_store_path(video_path, base) for video_path in state.video_paths],
         "footage_strategy": state.footage_strategy,
+        "output_format": state.output_format.value,
         "playhead_seconds": state.playhead_seconds,
         "effect_mappings": [
             {"instrument": mapping.instrument.value, "action": mapping.action.value}
@@ -217,6 +220,7 @@ def _state_from_dict(payload: dict[str, Any], base: Path) -> ProjectState:
             )
         ),
         generated_timeline=generated_timeline,
+        output_format=OutputFormat(str(payload.get("output_format", OutputFormat.AUTO.value))),
     )
 
 

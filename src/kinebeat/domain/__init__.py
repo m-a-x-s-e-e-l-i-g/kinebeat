@@ -10,6 +10,7 @@ from kinebeat.domain.music import (
     SongMetadata,
     StemArtifact,
 )
+from kinebeat.domain.output import OutputFormat, resolve_output_format
 from kinebeat.domain.project import (
     ProjectFormatError,
     ProjectState,
@@ -26,11 +27,13 @@ __all__ = [
     "InstrumentMapping",
     "MusicAnalysis",
     "MusicalEvent",
+    "OutputFormat",
     "ProjectFormatError",
     "ProjectState",
     "SongMetadata",
     "StemArtifact",
     "TimelineClip",
     "load_project",
+    "resolve_output_format",
     "save_project",
 ]

@@ -93,6 +93,30 @@ def test_preview_renderer_outputs_timeline_clip_order(tmp_path: Path) -> None:
     assert progress[-1] == (100, "Video preview ready")
 
 
+def test_preview_renderer_outputs_vertical_canvas(tmp_path: Path) -> None:
+    source = tmp_path / "vertical-source.mp4"
+    output = tmp_path / "vertical-preview.mp4"
+    _write_color_video(source, (80, 120, 160))
+    timeline = GeneratedTimeline((TimelineClip(source, 0.0, 1.0),), seed=3)
+
+    result = render_video_preview(
+        timeline,
+        output,
+        width=90,
+        height=160,
+        frames_per_second=10,
+        progress=lambda *_: None,
+        cancelled=lambda: False,
+    )
+
+    with av.open(str(result)) as container:
+        stream = container.streams.video[0]
+        frame = next(container.decode(video=0)).to_ndarray(format="rgb24")
+
+    assert (stream.width, stream.height) == (90, 160)
+    assert frame.shape == (160, 90, 3)
+
+
 def test_preview_renderer_removes_partial_file_when_cancelled(tmp_path: Path) -> None:
     source = tmp_path / "source.mp4"
     output = tmp_path / "preview.mp4"

@@ -16,6 +16,7 @@ from kinebeat.domain import (
     EventKind,
     GeneratedTimeline,
     InstrumentMapping,
+    OutputFormat,
     ProjectState,
     TimelineClip,
 )
@@ -42,11 +43,16 @@ def _wait_for_media_checks(window: KinebeatWindow) -> None:
     raise AssertionError("Media checks did not finish")
 
 
-def _mark_media_ready(window: KinebeatWindow, *paths: Path) -> None:
+def _mark_media_ready(
+    window: KinebeatWindow,
+    *paths: Path,
+    width: int = 1920,
+    height: int = 1080,
+) -> None:
     image = QImage(72, 45, QImage.Format.Format_RGB888)
     image.fill(Qt.GlobalColor.red)
     for path in paths:
-        window._media_thumbnail_ready(path.resolve(), image)
+        window._media_thumbnail_ready(path.resolve(), image, 1.0, width, height)
 
 
 def test_first_run_guides_song_first_flow() -> None:
@@ -69,6 +75,8 @@ def test_demo_analysis_unlocks_footage_but_not_generation() -> None:
     assert window.analyse_button.isEnabled() is True
     assert window.footage_button.isEnabled() is True
     assert window.strategy_combo.isEnabled() is True
+    assert window.output_format_combo.isEnabled() is True
+    assert window.output_format_combo.currentData() == OutputFormat.AUTO.value
     assert window.generate_button.isEnabled() is False
     assert "EVENTS" in window.timeline_meta.text()
     assert window.mapping_combos[EventKind.KICK].currentData() == EffectAction.CUT.value
@@ -91,6 +99,20 @@ def test_media_checks_run_four_clips_concurrently() -> None:
     window = KinebeatWindow()
 
     assert window._thumbnail_pool.maxThreadCount() == 4
+    window.close()
+
+
+def test_auto_output_format_tracks_vertical_media(tmp_path) -> None:
+    _app()
+    window = KinebeatWindow()
+    window.load_demo_state()
+    paths = (tmp_path / "vertical-one.mp4", tmp_path / "vertical-two.mp4")
+    window._video_paths = paths
+
+    _mark_media_ready(window, *paths, width=1080, height=1920)
+
+    assert window._resolved_output_format() is OutputFormat.VERTICAL_9_16
+    assert window.output_format_hint.text() == "Auto chose 9:16 · 360 × 640 preview"
     window.close()
 
 
@@ -252,7 +274,7 @@ def test_generate_video_edit_reports_progress_and_draws_edits(tmp_path, monkeypa
     ready_paths = (tmp_path / "one.mp4", tmp_path / "two.mp4")
     broken_path = tmp_path / "broken.mp4"
     window._video_paths = ready_paths + (broken_path,)
-    _mark_media_ready(window, *ready_paths)
+    _mark_media_ready(window, *ready_paths, width=1080, height=1920)
     window._media_thumbnail_failed(broken_path, "Invalid video data")
     window._sync_state()
     progress: list[tuple[int, str]] = []
@@ -268,10 +290,13 @@ def test_generate_video_edit_reports_progress_and_draws_edits(tmp_path, monkeypa
         cancelled,
         effect_mappings,
         source_durations,
+        width,
+        height,
     ):
         del effect_mappings
         assert video_paths == ready_paths
         assert source_durations == {path: 1.0 for path in ready_paths}
+        assert (width, height) == (360, 640)
         timeline = generate_first_cut(
             analysis,
             video_paths,
@@ -282,7 +307,7 @@ def test_generate_video_edit_reports_progress_and_draws_edits(tmp_path, monkeypa
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.touch()
-        return VideoEditPreview(timeline, output_path, 640, 360, 24)
+        return VideoEditPreview(timeline, output_path, width, height, 24)
 
     def run_immediately(*, task, on_success, **_kwargs) -> None:
         result = task(
@@ -332,6 +357,8 @@ def test_generate_button_runs_background_video_edit(tmp_path, monkeypatch) -> No
         cancelled,
         effect_mappings,
         source_durations,
+        width,
+        height,
     ):
         del effect_mappings, source_durations
         timeline = generate_first_cut(
@@ -344,7 +371,7 @@ def test_generate_button_runs_background_video_edit(tmp_path, monkeypatch) -> No
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.touch()
-        return VideoEditPreview(timeline, output_path, 640, 360, 24)
+        return VideoEditPreview(timeline, output_path, width, height, 24)
 
     monkeypatch.setattr(window_module, "generate_video_edit_preview", fake_preview)
     monkeypatch.setattr(
@@ -387,12 +414,14 @@ def test_project_application_restores_timeline_and_strategy(tmp_path, monkeypatc
             InstrumentMapping(EventKind.KICK, EffectAction.TIME_BEND),
             InstrumentMapping(EventKind.SNARE, EffectAction.NO_ACTION),
         ),
+        output_format=OutputFormat.VERTICAL_9_16,
     )
 
     window._apply_project(tmp_path / "restored.kinebeat", state)
     _wait_for_media_checks(window)
 
     assert window.strategy_combo.currentText() == "Least used first"
+    assert window.output_format_combo.currentData() == OutputFormat.VERTICAL_9_16.value
     assert window.timeline.position_seconds == 42.5
     assert window.timecode_label.text() == "0:42 / 2:54"
     assert window.generate_button.isEnabled() is True
@@ -413,6 +442,21 @@ def test_mapping_selector_updates_project_state() -> None:
         mapping.instrument: mapping.action for mapping in window._project_state().effect_mappings
     }
     assert mapping_by_instrument[EventKind.SNARE] is EffectAction.ADD_AMBIANCE
+    assert window.isWindowModified() is True
+    window.close()
+
+
+def test_output_format_selector_updates_project_state() -> None:
+    _app()
+    window = KinebeatWindow()
+    window.load_demo_state()
+
+    window.output_format_combo.setCurrentIndex(
+        window.output_format_combo.findData(OutputFormat.SQUARE_1_1.value)
+    )
+
+    assert window._project_state().output_format is OutputFormat.SQUARE_1_1
+    assert window.output_format_hint.text() == "1:1 · 512 × 512 preview"
     assert window.isWindowModified() is True
     window.close()
 

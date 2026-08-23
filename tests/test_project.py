@@ -11,6 +11,7 @@ from kinebeat.domain import (
     InstrumentMapping,
     MusicalEvent,
     MusicAnalysis,
+    OutputFormat,
     ProjectFormatError,
     ProjectState,
     SongMetadata,
@@ -55,6 +56,7 @@ def test_project_round_trip_preserves_analysis_and_media_paths(tmp_path: Path) -
         12.75,
         mappings,
         generated_timeline,
+        output_format=OutputFormat.VERTICAL_9_16,
     )
     project_path = tmp_path / "edit.kinebeat"
 
@@ -64,6 +66,7 @@ def test_project_round_trip_preserves_analysis_and_media_paths(tmp_path: Path) -
     assert restored == state
     assert '"path": "media/song.wav"' in project_path.read_text(encoding="utf-8")
     assert restored.effect_mappings == mappings
+    assert restored.output_format is OutputFormat.VERTICAL_9_16
     assert restored.generated_timeline == generated_timeline
 
 
@@ -85,3 +88,4 @@ def test_older_project_without_mappings_receives_new_defaults(tmp_path: Path) ->
     restored = load_project(path)
 
     assert restored.effect_mappings == DEFAULT_EFFECT_MAPPINGS
+    assert restored.output_format is OutputFormat.AUTO

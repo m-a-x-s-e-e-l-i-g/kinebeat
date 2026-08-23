@@ -50,11 +50,13 @@ from kinebeat.domain import (
     InstrumentMapping,
     MusicalEvent,
     MusicAnalysis,
+    OutputFormat,
     ProjectFormatError,
     ProjectState,
     SongMetadata,
     StemArtifact,
     load_project,
+    resolve_output_format,
     save_project,
 )
 from kinebeat.processing import (
@@ -90,6 +92,13 @@ EFFECT_OPTIONS = (
     (EffectAction.VIDEO_VOLUME, "Video volume · XYT"),
     (EffectAction.DATAMOSH, "Datamosh"),
     (EffectAction.NO_ACTION, "No action"),
+)
+OUTPUT_FORMAT_OPTIONS = (
+    (OutputFormat.AUTO, "Auto · match footage"),
+    (OutputFormat.LANDSCAPE_16_9, "Landscape · 16:9"),
+    (OutputFormat.VERTICAL_9_16, "Vertical · 9:16"),
+    (OutputFormat.SQUARE_1_1, "Square · 1:1"),
+    (OutputFormat.PORTRAIT_4_5, "Portrait · 4:5"),
 )
 
 
@@ -246,7 +255,7 @@ class MediaLibraryRow(QFrame):
 
 
 class MediaThumbnailSignals(QObject):
-    ready = Signal(Path, object, float)
+    ready = Signal(Path, object, float, int, int)
     failed = Signal(Path, str)
 
 
@@ -271,7 +280,13 @@ class MediaThumbnailTask(QRunnable):
         except (OSError, ValueError) as error:
             self.signals.failed.emit(self.path, str(error))
         else:
-            self.signals.ready.emit(self.path, image, result.duration_seconds)
+            self.signals.ready.emit(
+                self.path,
+                image,
+                result.duration_seconds,
+                result.source_width,
+                result.source_height,
+            )
 
 
 def _compact_media_name(name: str, limit: int = 24) -> str:
@@ -310,9 +325,11 @@ class KinebeatWindow(QMainWindow):
         self._thumbnail_pool.setMaxThreadCount(4)
         self._thumbnail_cache: dict[tuple[Path, int, int], QImage] = {}
         self._media_durations: dict[tuple[Path, int, int], float] = {}
+        self._media_dimensions: dict[tuple[Path, int, int], tuple[int, int]] = {}
         self._thumbnail_failures: dict[tuple[Path, int, int], str] = {}
         self._thumbnail_tasks: dict[Path, MediaThumbnailTask] = {}
         self._build_ui()
+        self._update_output_format_hint()
         self._setup_save_feedback()
         self._setup_playback()
         self._setup_shortcuts()
@@ -513,7 +530,7 @@ class KinebeatWindow(QMainWindow):
         inspector.setMaximumWidth(340)
         layout = QVBoxLayout(inspector)
         layout.setContentsMargins(18, 20, 18, 18)
-        layout.setSpacing(12)
+        layout.setSpacing(8)
         eyebrow = QLabel("GENERATOR")
         eyebrow.setObjectName("eyebrow")
         title = QLabel("Video edit rules")
@@ -521,6 +538,15 @@ class KinebeatWindow(QMainWindow):
         helper = QLabel("Each detected instrument can cut or trigger a rendered effect.")
         helper.setObjectName("bodyMuted")
         helper.setWordWrap(True)
+        output_format_label = QLabel("OUTPUT FORMAT")
+        output_format_label.setObjectName("fieldLabel")
+        self.output_format_combo = QComboBox()
+        for output_format, label in OUTPUT_FORMAT_OPTIONS:
+            self.output_format_combo.addItem(label, output_format.value)
+        self.output_format_combo.currentIndexChanged.connect(self._output_format_changed)
+        self.output_format_hint = QLabel()
+        self.output_format_hint.setObjectName("formatHint")
+        self.output_format_hint.setWordWrap(True)
         strategy_label = QLabel("FOOTAGE SELECTION")
         strategy_label.setObjectName("fieldLabel")
         self.strategy_combo = QComboBox()
@@ -538,10 +564,14 @@ class KinebeatWindow(QMainWindow):
         layout.addWidget(eyebrow)
         layout.addWidget(title)
         layout.addWidget(helper)
-        layout.addSpacing(12)
+        layout.addSpacing(8)
+        layout.addWidget(output_format_label)
+        layout.addWidget(self.output_format_combo)
+        layout.addWidget(self.output_format_hint)
+        layout.addSpacing(8)
         layout.addWidget(strategy_label)
         layout.addWidget(self.strategy_combo)
-        layout.addSpacing(12)
+        layout.addSpacing(8)
         self.mapping_combos: dict[EventKind, QComboBox] = {}
         for mapping in DEFAULT_EFFECT_MAPPINGS:
             layout.addWidget(self._mapping_row(mapping.instrument, mapping.action))
@@ -555,10 +585,10 @@ class KinebeatWindow(QMainWindow):
     def _mapping_row(self, instrument: EventKind, default_action: EffectAction) -> QFrame:
         row = QFrame()
         row.setObjectName("mappingRow")
-        row.setMinimumHeight(68)
+        row.setMinimumHeight(58)
         layout = QVBoxLayout(row)
-        layout.setContentsMargins(0, 7, 0, 8)
-        layout.setSpacing(5)
+        layout.setContentsMargins(0, 4, 0, 5)
+        layout.setSpacing(3)
         instrument_label = QLabel(INSTRUMENT_LABELS[instrument])
         instrument_label.setObjectName("mappingInstrument")
         effect_combo = QComboBox()
@@ -747,6 +777,7 @@ class KinebeatWindow(QMainWindow):
                 for instrument, combo in self.mapping_combos.items()
             ),
             generated_timeline=self._generated_timeline,
+            output_format=OutputFormat(self.output_format_combo.currentData()),
         )
 
     def _apply_project(self, path: Path, state: ProjectState) -> None:
@@ -760,6 +791,8 @@ class KinebeatWindow(QMainWindow):
         self._project_path = path.resolve()
         strategy_index = self.strategy_combo.findText(state.footage_strategy)
         self.strategy_combo.setCurrentIndex(max(0, strategy_index))
+        output_format_index = self.output_format_combo.findData(state.output_format.value)
+        self.output_format_combo.setCurrentIndex(max(0, output_format_index))
         for default in DEFAULT_EFFECT_MAPPINGS:
             combo = self.mapping_combos[default.instrument]
             combo.setCurrentIndex(combo.findData(default.action.value))
@@ -879,6 +912,7 @@ class KinebeatWindow(QMainWindow):
     def _update_footage_copy(self) -> None:
         self._refresh_media_library()
         self._update_footage_summary()
+        self._update_output_format_hint()
 
     def _update_footage_summary(self) -> None:
         count = len(self._video_paths)
@@ -948,9 +982,14 @@ class KinebeatWindow(QMainWindow):
         self._thumbnail_tasks[source] = task
         self._thumbnail_pool.start(task)
 
-    @Slot(Path, object, float)
+    @Slot(Path, object, float, int, int)
     def _media_thumbnail_ready(
-        self, path: Path, value: object, duration_seconds: float = 1.0
+        self,
+        path: Path,
+        value: object,
+        duration_seconds: float = 1.0,
+        source_width: int = 1920,
+        source_height: int = 1080,
     ) -> None:
         self._thumbnail_tasks.pop(path.resolve(), None)
         if not isinstance(value, QImage):
@@ -960,6 +999,7 @@ class KinebeatWindow(QMainWindow):
         self._thumbnail_failures.pop(key, None)
         self._thumbnail_cache[key] = value
         self._media_durations[key] = duration_seconds
+        self._media_dimensions[key] = (source_width, source_height)
         for row in self._media_rows:
             if row.path.resolve() == path.resolve():
                 row.set_thumbnail(value)
@@ -976,6 +1016,7 @@ class KinebeatWindow(QMainWindow):
 
     def _media_check_state_changed(self) -> None:
         self._update_footage_summary()
+        self._update_output_format_hint()
         ready_count = len(self._verified_video_paths())
         broken_count = len(self._broken_video_paths())
         checking_count = len(self._video_paths) - ready_count - broken_count
@@ -1037,6 +1078,28 @@ class KinebeatWindow(QMainWindow):
 
     def _verified_source_durations(self, paths: tuple[Path, ...]) -> dict[Path, float]:
         return {path: self._media_durations[self._thumbnail_key(path)] for path in paths}
+
+    def _verified_source_dimensions(self) -> tuple[tuple[int, int], ...]:
+        return tuple(
+            self._media_dimensions[self._thumbnail_key(path)]
+            for path in self._verified_video_paths()
+        )
+
+    def _selected_output_format(self) -> OutputFormat:
+        return OutputFormat(self.output_format_combo.currentData())
+
+    def _resolved_output_format(self) -> OutputFormat:
+        return resolve_output_format(
+            self._selected_output_format(),
+            self._verified_source_dimensions(),
+        )
+
+    def _update_output_format_hint(self) -> None:
+        selected = self._selected_output_format()
+        resolved = self._resolved_output_format()
+        width, height = resolved.preview_size
+        prefix = f"Auto chose {resolved.value}" if selected is OutputFormat.AUTO else resolved.value
+        self.output_format_hint.setText(f"{prefix} · {width} × {height} preview")
 
     @staticmethod
     def _thumbnail_key(path: Path) -> tuple[Path, int, int]:
@@ -1103,6 +1166,26 @@ class KinebeatWindow(QMainWindow):
             self._set_dirty(True)
 
     @Slot()
+    def _output_format_changed(self) -> None:
+        self._update_output_format_hint()
+        if self._loading_project or not self._analysis:
+            return
+        self._set_dirty(True)
+        if self._preview_path:
+            self.media_player.pause()
+            self.video_player.pause()
+            self._set_video_preview_source(None)
+            resolved = self._resolved_output_format()
+            self.preview_eyebrow.setText("OUTPUT FORMAT CHANGED")
+            self.preview_title.setText("Rebuild the playable\nvideo preview.")
+            self.preview_body.setText(
+                f"Generate again to render the current edit on a {resolved.value} canvas."
+            )
+            self.task_title.setText("VIDEO EDIT NEEDS REBUILDING")
+            self.task_detail.setText(f"Output format changed to {resolved.value}")
+        self._sync_state()
+
+    @Slot()
     def _mapping_changed(self) -> None:
         if not self._loading_project and self._analysis:
             self._set_dirty(True)
@@ -1120,6 +1203,8 @@ class KinebeatWindow(QMainWindow):
             return
         analysis = self._analysis
         strategy = self.strategy_combo.currentText()
+        output_format = self._resolved_output_format()
+        preview_width, preview_height = output_format.preview_size
         effect_mappings = tuple(
             InstrumentMapping(instrument, EffectAction(combo.currentData()))
             for instrument, combo in self.mapping_combos.items()
@@ -1134,7 +1219,8 @@ class KinebeatWindow(QMainWindow):
         self.preview_eyebrow.setText("GENERATING VIDEO EDIT")
         self.preview_title.setText("Building your\nplayable preview.")
         self.preview_body.setText(
-            "Rendering a lightweight 640 × 360 proxy from your source clips. "
+            f"Rendering a lightweight {preview_width} × {preview_height} "
+            f"{output_format.value} proxy from your source clips. "
             "Progress stays visible below."
         )
         self._start_task(
@@ -1148,6 +1234,8 @@ class KinebeatWindow(QMainWindow):
                 output_path=output_path,
                 effect_mappings=effect_mappings,
                 source_durations=self._verified_source_durations(video_paths),
+                width=preview_width,
+                height=preview_height,
                 **kwargs,
             ),
             on_success=self._video_edit_ready,
@@ -1474,6 +1562,7 @@ class KinebeatWindow(QMainWindow):
         self.footage_button.setEnabled(self._analysis is not None and not busy)
         for row in self._media_rows:
             row.remove_button.setEnabled(not busy)
+        self.output_format_combo.setEnabled(self._analysis is not None and not busy)
         self.strategy_combo.setEnabled(self._analysis is not None and not busy)
         for combo in self.mapping_combos.values():
             combo.setEnabled(self._analysis is not None and not busy)

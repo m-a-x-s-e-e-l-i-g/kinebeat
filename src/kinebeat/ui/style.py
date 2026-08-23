@@ -100,6 +100,7 @@ QLabel#sectionTitle {
     font-weight: 700;
 }
 QLabel#bodyMuted { color: #858a84; font-size: 12px; }
+QLabel#formatHint { color: #686d67; font-size: 10px; }
 QLabel#sourceName { color: #e4e6e1; font-weight: 700; }
 QLabel#sourceMeta { color: #898e88; font-size: 11px; }
 QFrame#dropZone {
