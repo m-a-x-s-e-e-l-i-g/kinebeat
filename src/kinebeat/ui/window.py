@@ -60,8 +60,8 @@ from kinebeat.domain import (
 from kinebeat.processing import (
     MusicAnalysisService,
     VideoEditPreview,
-    extract_video_thumbnail,
     generate_video_edit_preview,
+    inspect_video_media,
     probe_song,
 )
 from kinebeat.ui.tasks import TaskWorker
@@ -181,7 +181,7 @@ class MediaLibraryRow(QFrame):
         super().__init__()
         self.path = path
         self.setObjectName("mediaLibraryRow")
-        self.setProperty("missing", not path.is_file())
+        self.setProperty("health", "checking")
         self.setToolTip(str(path))
 
         layout = QHBoxLayout(self)
@@ -199,10 +199,13 @@ class MediaLibraryRow(QFrame):
         name = QLabel(_compact_media_name(path.name, 18))
         name.setObjectName("mediaName")
         name.setToolTip(path.name)
-        kind = QLabel(f"{index:02d} · {path.suffix.removeprefix('.').upper() or 'FILE'}")
-        kind.setObjectName("mediaMeta")
+        self._media_kind = path.suffix.removeprefix(".").upper() or "FILE"
+        self._media_index = index
+        self.meta = QLabel()
+        self.meta.setObjectName("mediaMeta")
+        self._set_meta_status("CHECKING")
         details.addWidget(name)
-        details.addWidget(kind)
+        details.addWidget(self.meta)
 
         self.remove_button = QPushButton("REMOVE")
         self.remove_button.setObjectName("mediaRemoveButton")
@@ -220,22 +223,31 @@ class MediaLibraryRow(QFrame):
     def set_thumbnail(self, image: QImage) -> None:
         self.thumbnail.setText("")
         self.thumbnail.setPixmap(QPixmap.fromImage(image))
-        self._set_thumbnail_state("ready")
+        self._set_media_state("ready")
+        self._set_meta_status("READY")
+        self.setToolTip(str(self.path))
 
-    def set_thumbnail_unavailable(self) -> None:
+    def set_broken(self, reason: str) -> None:
         self.thumbnail.setPixmap(QPixmap())
-        self.thumbnail.setText("NO PREVIEW")
-        self._set_thumbnail_state("unavailable")
+        self.thumbnail.setText("BROKEN")
+        self._set_media_state("broken")
+        self._set_meta_status("BROKEN")
+        self.setToolTip(f"{self.path}\n\nBroken: {reason}")
 
-    def _set_thumbnail_state(self, state: str) -> None:
+    def _set_meta_status(self, status: str) -> None:
+        self.meta.setText(f"{self._media_index:02d} · {self._media_kind} · {status}")
+
+    def _set_media_state(self, state: str) -> None:
+        self.setProperty("health", state)
         self.thumbnail.setProperty("state", state)
-        self.thumbnail.style().unpolish(self.thumbnail)
-        self.thumbnail.style().polish(self.thumbnail)
+        for widget in (self, self.thumbnail, self.meta):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
 
 
 class MediaThumbnailSignals(QObject):
-    ready = Signal(Path, object)
-    failed = Signal(Path)
+    ready = Signal(Path, object, float)
+    failed = Signal(Path, str)
 
 
 class MediaThumbnailTask(QRunnable):
@@ -247,7 +259,8 @@ class MediaThumbnailTask(QRunnable):
     @Slot()
     def run(self) -> None:
         try:
-            pixels = extract_video_thumbnail(self.path)
+            result = inspect_video_media(self.path)
+            pixels = result.thumbnail
             image = QImage(
                 pixels.data,
                 pixels.shape[1],
@@ -255,10 +268,10 @@ class MediaThumbnailTask(QRunnable):
                 pixels.strides[0],
                 QImage.Format.Format_RGB888,
             ).copy()
-        except (OSError, ValueError):
-            self.signals.failed.emit(self.path)
+        except (OSError, ValueError) as error:
+            self.signals.failed.emit(self.path, str(error))
         else:
-            self.signals.ready.emit(self.path, image)
+            self.signals.ready.emit(self.path, image, result.duration_seconds)
 
 
 def _compact_media_name(name: str, limit: int = 24) -> str:
@@ -296,7 +309,8 @@ class KinebeatWindow(QMainWindow):
         self._thumbnail_pool = QThreadPool(self)
         self._thumbnail_pool.setMaxThreadCount(2)
         self._thumbnail_cache: dict[tuple[Path, int, int], QImage] = {}
-        self._thumbnail_failures: set[tuple[Path, int, int]] = set()
+        self._media_durations: dict[tuple[Path, int, int], float] = {}
+        self._thumbnail_failures: dict[tuple[Path, int, int], str] = {}
         self._thumbnail_tasks: dict[Path, MediaThumbnailTask] = {}
         self._build_ui()
         self._setup_save_feedback()
@@ -816,19 +830,13 @@ class KinebeatWindow(QMainWindow):
         self._set_dirty(False)
         self._sync_state()
 
-        missing = [media_path for media_path in self._all_media_paths() if not media_path.is_file()]
-        if missing:
-            preview = "\n".join(str(media_path) for media_path in missing[:5])
-            extra = f"\n…and {len(missing) - 5} more" if len(missing) > 5 else ""
+        missing_song = self._song and not self._song.path.is_file()
+        if missing_song:
             QMessageBox.warning(
                 self,
-                "Some project media is missing",
-                f"The project opened, but these files could not be found:\n\n{preview}{extra}",
+                "Project music is missing",
+                f"The project opened, but its music could not be found:\n\n{self._song.path}",
             )
-
-    def _all_media_paths(self) -> tuple[Path, ...]:
-        song_paths = (self._song.path,) if self._song else ()
-        return song_paths + self._video_paths
 
     @Slot()
     def _choose_video_clips(self) -> None:
@@ -849,35 +857,48 @@ class KinebeatWindow(QMainWindow):
         self._video_paths = tuple(imported)
         self._update_footage_copy()
         if self._generated_timeline:
-            self.task_title.setText("MEDIA LIBRARY UPDATED")
+            self.task_title.setText("CHECKING MEDIA")
             self.task_detail.setText(
-                f"Added {added_count} video {'clip' if added_count == 1 else 'clips'} · "
-                "regenerate to use new footage"
+                f"Checking {added_count} added video {'clip' if added_count == 1 else 'clips'}"
             )
         else:
             self.preview_stack.setCurrentIndex(0)
-            self.preview_eyebrow.setText("FOOTAGE READY")
-            self.preview_title.setText("Ready to build\nthe video edit.")
+            self.preview_eyebrow.setText("CHECKING FOOTAGE")
+            self.preview_title.setText("Verifying your\nvideo clips.")
             self.preview_body.setText(
-                f"{len(self._video_paths)} clips will be selected using "
-                f"{self.strategy_combo.currentText().lower()}."
+                "Kinebeat is checking that each file has decodable video and usable timing. "
+                "Broken clips stay visible in the Media library and will be skipped."
             )
-            self.task_title.setText("FOOTAGE READY")
-            self.task_detail.setText(f"{len(self._video_paths)} video clips imported")
+            self.task_title.setText("CHECKING MEDIA")
+            self.task_detail.setText(
+                f"Checking {added_count} video {'clip' if added_count == 1 else 'clips'}"
+            )
         self._set_dirty(True)
         self._sync_state()
 
     def _update_footage_copy(self) -> None:
+        self._refresh_media_library()
+        self._update_footage_summary()
+
+    def _update_footage_summary(self) -> None:
         count = len(self._video_paths)
         if not count:
             self.footage_copy.setText("No video clips yet.")
             self.footage_button.setText("Import video clips")
-            self._refresh_media_library()
             return
-        noun = "clip" if count == 1 else "clips"
-        self.footage_copy.setText(f"{count} video {noun} available")
+
+        ready_count = len(self._verified_video_paths())
+        broken_count = len(self._broken_video_paths())
+        checking_count = max(0, count - ready_count - broken_count)
+        states = []
+        if ready_count:
+            states.append(f"{ready_count} ready")
+        if checking_count:
+            states.append(f"{checking_count} checking")
+        if broken_count:
+            states.append(f"{broken_count} broken")
+        self.footage_copy.setText(" · ".join(states))
         self.footage_button.setText("Add video clips")
-        self._refresh_media_library()
 
     def _refresh_media_library(self) -> None:
         while self.media_library_layout.count():
@@ -909,8 +930,13 @@ class KinebeatWindow(QMainWindow):
         if image is not None:
             row.set_thumbnail(image)
             return
-        if key in self._thumbnail_failures or not row.path.is_file():
-            row.set_thumbnail_unavailable()
+        if reason := self._thumbnail_failures.get(key):
+            row.set_broken(reason)
+            return
+        if not row.path.is_file():
+            reason = "The file is missing or no longer accessible."
+            self._thumbnail_failures[key] = reason
+            row.set_broken(reason)
             return
 
         source = row.path.resolve()
@@ -922,24 +948,95 @@ class KinebeatWindow(QMainWindow):
         self._thumbnail_tasks[source] = task
         self._thumbnail_pool.start(task)
 
-    @Slot(Path, object)
-    def _media_thumbnail_ready(self, path: Path, value: object) -> None:
+    @Slot(Path, object, float)
+    def _media_thumbnail_ready(
+        self, path: Path, value: object, duration_seconds: float = 1.0
+    ) -> None:
         self._thumbnail_tasks.pop(path.resolve(), None)
         if not isinstance(value, QImage):
-            self._media_thumbnail_failed(path)
+            self._media_thumbnail_failed(path, "The decoder returned an invalid preview frame.")
             return
-        self._thumbnail_cache[self._thumbnail_key(path)] = value
+        key = self._thumbnail_key(path)
+        self._thumbnail_failures.pop(key, None)
+        self._thumbnail_cache[key] = value
+        self._media_durations[key] = duration_seconds
         for row in self._media_rows:
             if row.path.resolve() == path.resolve():
                 row.set_thumbnail(value)
+        self._media_check_state_changed()
 
-    @Slot(Path)
-    def _media_thumbnail_failed(self, path: Path) -> None:
+    @Slot(Path, str)
+    def _media_thumbnail_failed(self, path: Path, reason: str) -> None:
         self._thumbnail_tasks.pop(path.resolve(), None)
-        self._thumbnail_failures.add(self._thumbnail_key(path))
+        self._thumbnail_failures[self._thumbnail_key(path)] = reason
         for row in self._media_rows:
             if row.path.resolve() == path.resolve():
-                row.set_thumbnail_unavailable()
+                row.set_broken(reason)
+        self._media_check_state_changed()
+
+    def _media_check_state_changed(self) -> None:
+        self._update_footage_summary()
+        ready_count = len(self._verified_video_paths())
+        broken_count = len(self._broken_video_paths())
+        checking_count = len(self._video_paths) - ready_count - broken_count
+        if checking_count > 0:
+            self.task_title.setText("CHECKING MEDIA")
+            self.task_detail.setText(
+                f"Checking {checking_count} video {'clip' if checking_count == 1 else 'clips'}"
+            )
+        elif broken_count and ready_count:
+            self.task_title.setText("MEDIA CHECK COMPLETE")
+            self.task_detail.setText(
+                f"{ready_count} ready · {broken_count} broken and excluded from generation"
+            )
+        elif broken_count:
+            self.task_title.setText("NO USABLE FOOTAGE")
+            self.task_detail.setText(
+                f"{broken_count} broken {'clip' if broken_count == 1 else 'clips'} · "
+                "remove or replace them"
+            )
+        elif ready_count:
+            self.task_title.setText("FOOTAGE READY")
+            self.task_detail.setText(
+                f"{ready_count} video {'clip' if ready_count == 1 else 'clips'} checked"
+            )
+        if checking_count <= 0 and not self._generated_timeline:
+            self.preview_stack.setCurrentIndex(0)
+            if ready_count:
+                self.preview_eyebrow.setText("FOOTAGE READY")
+                self.preview_title.setText("Ready to build\nthe video edit.")
+                skipped = (
+                    f" {broken_count} broken {'clip was' if broken_count == 1 else 'clips were'} "
+                    "excluded."
+                    if broken_count
+                    else ""
+                )
+                self.preview_body.setText(
+                    f"{ready_count} checked {'clip is' if ready_count == 1 else 'clips are'} ready "
+                    f"for {self.strategy_combo.currentText().lower()}.{skipped}"
+                )
+            elif broken_count:
+                self.preview_eyebrow.setText("NO USABLE FOOTAGE")
+                self.preview_title.setText("Replace the broken\nvideo clips.")
+                self.preview_body.setText(
+                    "The files remain in the Media library so you can identify and remove them."
+                )
+        self._sync_state()
+
+    def _verified_video_paths(self) -> tuple[Path, ...]:
+        return tuple(
+            path for path in self._video_paths if self._thumbnail_key(path) in self._thumbnail_cache
+        )
+
+    def _broken_video_paths(self) -> tuple[Path, ...]:
+        return tuple(
+            path
+            for path in self._video_paths
+            if self._thumbnail_key(path) in self._thumbnail_failures
+        )
+
+    def _verified_source_durations(self, paths: tuple[Path, ...]) -> dict[Path, float]:
+        return {path: self._media_durations[self._thumbnail_key(path)] for path in paths}
 
     @staticmethod
     def _thumbnail_key(path: Path) -> tuple[Path, int, int]:
@@ -1015,10 +1112,13 @@ class KinebeatWindow(QMainWindow):
 
     @Slot()
     def _generate_video_edit(self) -> None:
-        if not self._analysis or not self._video_paths:
+        video_paths = self._verified_video_paths()
+        checking_media = bool(self._video_paths) and (
+            len(video_paths) + len(self._broken_video_paths()) < len(self._video_paths)
+        )
+        if not self._analysis or checking_media or not video_paths:
             return
         analysis = self._analysis
-        video_paths = self._video_paths
         strategy = self.strategy_combo.currentText()
         effect_mappings = tuple(
             InstrumentMapping(instrument, EffectAction(combo.currentData()))
@@ -1047,6 +1147,7 @@ class KinebeatWindow(QMainWindow):
                 seed=seed,
                 output_path=output_path,
                 effect_mappings=effect_mappings,
+                source_durations=self._verified_source_durations(video_paths),
                 **kwargs,
             ),
             on_success=self._video_edit_ready,
@@ -1345,7 +1446,9 @@ class KinebeatWindow(QMainWindow):
         elif self._analysis:
             self.task_title.setText("STRUCTURE READY")
             self.task_detail.setText(
-                "Generate the video edit" if self._video_paths else "Import footage to continue"
+                "Generate the video edit"
+                if self._verified_video_paths()
+                else "Import usable footage to continue"
             )
             self.task_progress.setValue(100)
         elif self._song:
@@ -1362,6 +1465,10 @@ class KinebeatWindow(QMainWindow):
 
     def _sync_state(self) -> None:
         busy = self._task_thread is not None
+        verified_paths = self._verified_video_paths()
+        media_checking = bool(self._video_paths) and (
+            len(verified_paths) + len(self._broken_video_paths()) < len(self._video_paths)
+        )
         self.choose_music_button.setDisabled(busy)
         self.analyse_button.setEnabled(self._song is not None and not busy)
         self.footage_button.setEnabled(self._analysis is not None and not busy)
@@ -1371,12 +1478,17 @@ class KinebeatWindow(QMainWindow):
         for combo in self.mapping_combos.values():
             combo.setEnabled(self._analysis is not None and not busy)
         self.generate_button.setEnabled(
-            self._analysis is not None and bool(self._video_paths) and not busy
+            self._analysis is not None and bool(verified_paths) and not media_checking and not busy
         )
         if not busy:
-            self.generate_button.setText(
-                "Regenerate video edit" if self._generated_timeline else "Generate video edit"
-            )
+            if media_checking:
+                self.generate_button.setText("Checking video clips…")
+            elif self._video_paths and not verified_paths:
+                self.generate_button.setText("No usable video clips")
+            else:
+                self.generate_button.setText(
+                    "Regenerate video edit" if self._generated_timeline else "Generate video edit"
+                )
         self.play_button.setEnabled(
             self._song is not None and self._song.path.is_file() and not busy
         )

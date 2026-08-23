@@ -3,8 +3,9 @@ from pathlib import Path
 
 import av
 import numpy as np
+import pytest
 
-from kinebeat.processing import extract_video_thumbnail
+from kinebeat.processing import extract_video_thumbnail, inspect_video_media
 
 
 def _write_sequence_video(path: Path) -> None:
@@ -35,3 +36,21 @@ def test_video_thumbnail_decodes_and_crops_a_representative_frame(tmp_path: Path
     assert thumbnail.dtype == np.uint8
     assert thumbnail.flags.c_contiguous
     assert float(thumbnail[..., 0].mean()) > float(thumbnail[..., 2].mean()) * 4
+
+
+def test_video_media_check_returns_usable_duration(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    _write_sequence_video(source)
+
+    result = inspect_video_media(source)
+
+    assert result.duration_seconds == 2.0
+    assert result.thumbnail.shape == (45, 72, 3)
+
+
+def test_video_media_check_rejects_invalid_input(tmp_path: Path) -> None:
+    source = tmp_path / "broken.mp4"
+    source.write_bytes(b"this is not video data")
+
+    with pytest.raises(ValueError, match="could not decode video"):
+        inspect_video_media(source)

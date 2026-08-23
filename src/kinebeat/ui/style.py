@@ -45,9 +45,14 @@ QFrame#mediaLibraryRow {
     border-radius: 2px;
 }
 QFrame#mediaLibraryRow:hover { background: #181a18; border-color: #494d48; }
-QFrame#mediaLibraryRow[missing="true"] { border-color: #6b504b; }
+QFrame#mediaLibraryRow[health="broken"] {
+    background: #171211;
+    border-color: #6b504b;
+}
 QLabel#mediaName { color: #dfe2dc; font-size: 11px; font-weight: 600; }
 QLabel#mediaMeta { color: #686d67; font-size: 9px; letter-spacing: 0.8px; }
+QFrame#mediaLibraryRow[health="broken"] QLabel#mediaName { color: #c8b7b2; }
+QFrame#mediaLibraryRow[health="broken"] QLabel#mediaMeta { color: #b67869; }
 QLabel#mediaThumbnail {
     color: #656a64;
     background: #090a09;
@@ -56,10 +61,10 @@ QLabel#mediaThumbnail {
     font-weight: 700;
     letter-spacing: 0.5px;
 }
-QLabel#mediaThumbnail[state="unavailable"] {
-    color: #735b55;
+QLabel#mediaThumbnail[state="broken"] {
+    color: #b67869;
     background: #14100f;
-    border-color: #513e39;
+    border-color: #6b504b;
 }
 QLabel#mediaThumbnail[state="ready"] { border-color: #3c403b; }
 QLabel#mediaEmptyState {

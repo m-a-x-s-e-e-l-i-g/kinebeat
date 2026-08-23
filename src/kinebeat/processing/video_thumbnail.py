@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 import av
@@ -12,13 +13,19 @@ from kinebeat.processing.preview_renderer import (
 )
 
 
-def extract_video_thumbnail(
+@dataclass(frozen=True, slots=True)
+class VideoMediaCheck:
+    thumbnail: np.ndarray
+    duration_seconds: float
+
+
+def inspect_video_media(
     path: Path,
     *,
     width: int = 72,
     height: int = 45,
-) -> np.ndarray:
-    """Decode a representative source frame into a cropped RGB thumbnail."""
+) -> VideoMediaCheck:
+    """Validate a source clip and return its duration and representative frame."""
     if width <= 0 or height <= 0:
         raise ValueError("Thumbnail dimensions must be positive.")
 
@@ -34,24 +41,34 @@ def extract_video_thumbnail(
             stream = container.streams.video[0]
             stream.thread_type = "AUTO"
             duration = _video_duration(container, stream)
-            target_seconds = min(2.0, duration * 0.08) if duration else 0.0
-            if target_seconds > 0 and stream.time_base:
-                container.seek(
-                    round(target_seconds / float(stream.time_base)),
-                    stream=stream,
-                    backward=True,
-                )
-
+            if not math.isfinite(duration) or duration <= 0:
+                raise ValueError(f"Video clip has no usable duration: {source.name}")
+            target_seconds = min(2.0, duration * 0.08)
             selected: av.VideoFrame | None = None
+            latest: av.VideoFrame | None = None
             for frame in _decode_video_frames(container, stream):
-                selected = frame
-                if frame.time is None or float(frame.time) + 1e-6 >= target_seconds:
-                    break
+                latest = frame
+                if selected is None and (
+                    frame.time is None or float(frame.time) + 1e-6 >= target_seconds
+                ):
+                    selected = frame
+            if selected is None:
+                selected = latest
             if selected is None:
                 raise ValueError(_unreadable_video_message(source))
-            return _cover_frame(selected, width, height)
+            return VideoMediaCheck(_cover_frame(selected, width, height), duration)
     except av.error.FFmpegError as error:
         raise ValueError(_unreadable_video_message(source, error)) from error
+
+
+def extract_video_thumbnail(
+    path: Path,
+    *,
+    width: int = 72,
+    height: int = 45,
+) -> np.ndarray:
+    """Decode a representative source frame into a cropped RGB thumbnail."""
+    return inspect_video_media(path, width=width, height=height).thumbnail
 
 
 def _video_duration(

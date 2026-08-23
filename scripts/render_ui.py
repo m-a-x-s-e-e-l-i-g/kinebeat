@@ -19,7 +19,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Render a Kinebeat UI verification image.")
     parser.add_argument("output", type=Path)
     parser.add_argument(
-        "--state", choices=("empty", "analysed", "generated", "saved"), default="analysed"
+        "--state",
+        choices=("empty", "analysed", "generated", "broken", "saved"),
+        default="analysed",
     )
     args = parser.parse_args()
     app = QApplication([])
@@ -28,33 +30,41 @@ def main() -> int:
     app.setStyleSheet(application_stylesheet(font))
     window = KinebeatWindow()
     window.resize(1480, 900)
-    if args.state in ("analysed", "generated", "saved"):
+    if args.state in ("analysed", "generated", "broken", "saved"):
         window.load_demo_state()
-    if args.state == "generated":
+    if args.state in ("generated", "broken"):
         window._video_paths = (
             Path("city-wide-establishing-shot.mp4"),
             Path("close-motion.mp4"),
             Path("night-drive-reflections-and-rain.mov"),
         )
-        result = generate_first_cut(
-            window._analysis,
-            window._video_paths,
-            strategy="Import order",
-            seed=42,
-            progress=lambda *_: None,
-            cancelled=lambda: False,
-        )
-        window._generated_timeline = result
-        window.timeline.set_first_cut(result)
         window._update_footage_copy()
         thumbnail_colors = ("#aa4b2c", "#45654b", "#394f79")
-        for row, color in zip(window._media_rows, thumbnail_colors, strict=True):
+        for index, (row, color) in enumerate(
+            zip(window._media_rows, thumbnail_colors, strict=True)
+        ):
+            if args.state == "broken" and index == 2:
+                window._media_thumbnail_failed(
+                    row.path, "Invalid data found when processing input."
+                )
+                continue
             thumbnail = QImage(72, 45, QImage.Format.Format_RGB888)
             thumbnail.fill(QColor(color))
-            row.set_thumbnail(thumbnail)
-        window.timeline_meta.setText(
-            f"{len(result.clips)} EDITS · {len(window._analysis.events)} EVENTS"
-        )
+            window._media_thumbnail_ready(row.path, thumbnail)
+        if args.state == "generated":
+            result = generate_first_cut(
+                window._analysis,
+                window._video_paths,
+                strategy="Import order",
+                seed=42,
+                progress=lambda *_: None,
+                cancelled=lambda: False,
+            )
+            window._generated_timeline = result
+            window.timeline.set_first_cut(result)
+            window.timeline_meta.setText(
+                f"{len(result.clips)} EDITS · {len(window._analysis.events)} EVENTS"
+            )
         window._sync_state()
     if args.state == "saved":
         window._show_save_feedback()

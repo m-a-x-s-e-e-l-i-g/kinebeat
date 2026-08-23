@@ -13,17 +13,23 @@ from kinebeat.processing.video_effects import (
     VideoEffectProcessor,
     build_effect_cues,
 )
-from kinebeat.processing.video_thumbnail import extract_video_thumbnail
+from kinebeat.processing.video_thumbnail import (
+    VideoMediaCheck,
+    extract_video_thumbnail,
+    inspect_video_media,
+)
 
 __all__ = [
     "MusicAnalysisService",
     "EffectCue",
     "VideoEditPreview",
+    "VideoMediaCheck",
     "VideoEffectProcessor",
     "build_effect_cues",
     "generate_first_cut",
     "generate_video_edit_preview",
     "extract_video_thumbnail",
+    "inspect_video_media",
     "probe_song",
     "render_video_preview",
 ]

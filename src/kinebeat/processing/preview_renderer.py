@@ -48,15 +48,19 @@ def generate_video_edit_preview(
     progress: ProgressCallback,
     cancelled: CancelCheck,
     effect_mappings: tuple[InstrumentMapping, ...] = DEFAULT_EFFECT_MAPPINGS,
+    source_durations: dict[Path, float] | None = None,
     width: int = 640,
     height: int = 360,
     frames_per_second: int = 24,
 ) -> VideoEditPreview:
-    source_durations = _probe_video_durations(
-        video_paths,
-        progress=lambda value, detail: progress(round(value * 0.08), detail),
-        cancelled=cancelled,
-    )
+    if source_durations is None:
+        source_durations = _probe_video_durations(
+            video_paths,
+            progress=lambda value, detail: progress(round(value * 0.08), detail),
+            cancelled=cancelled,
+        )
+    else:
+        progress(8, "Using checked footage")
     timeline = generate_first_cut(
         analysis,
         video_paths,
