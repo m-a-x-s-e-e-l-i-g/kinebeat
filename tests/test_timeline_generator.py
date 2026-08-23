@@ -71,9 +71,11 @@ def test_video_edit_never_reuses_a_source_range() -> None:
     )
 
     assert [clip.source_start_seconds for clip in result.clips] == [0.0, 2.0, 6.5]
-    assert [
-        clip.timeline_end_seconds - clip.timeline_start_seconds for clip in result.clips
-    ] == [2.0, 4.5, 3.5]
+    assert [clip.timeline_end_seconds - clip.timeline_start_seconds for clip in result.clips] == [
+        2.0,
+        4.5,
+        3.5,
+    ]
 
 
 def test_video_edit_stops_instead_of_repeating_exhausted_footage() -> None:

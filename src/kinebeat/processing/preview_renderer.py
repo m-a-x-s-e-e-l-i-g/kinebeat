@@ -113,9 +113,7 @@ def _probe_video_durations(
                 elif container.duration is not None:
                     duration = float(container.duration) / 1_000_000
                 else:
-                    raise ValueError(
-                        f"Kinebeat could not determine the duration of {source.name}."
-                    )
+                    raise ValueError(f"Kinebeat could not determine the duration of {source.name}.")
         except av.error.FFmpegError as error:
             raise ValueError(f"Kinebeat could not read {source.name}: {error}") from error
         if duration <= 0:

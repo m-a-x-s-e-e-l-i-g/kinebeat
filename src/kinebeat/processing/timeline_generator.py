@@ -43,8 +43,7 @@ def generate_first_cut(
             path
             for path in video_paths
             if source_durations is None
-            or source_cursors[path] + segment_duration
-            <= source_durations.get(path, 0.0) + 1e-6
+            or source_cursors[path] + segment_duration <= source_durations.get(path, 0.0) + 1e-6
         )
         if not eligible_paths:
             raise ValueError(
