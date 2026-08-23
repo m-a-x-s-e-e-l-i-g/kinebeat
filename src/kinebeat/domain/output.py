@@ -27,17 +27,13 @@ def resolve_output_format(
     if preference is not OutputFormat.AUTO:
         return preference
     valid = tuple(
-        (width, height)
-        for width, height in source_dimensions
-        if width > 0 and height > 0
+        (width, height) for width, height in source_dimensions if width > 0 and height > 0
     )
     if not valid:
         return OutputFormat.LANDSCAPE_16_9
 
     landscape = sum(width / height > 1.1 for width, height in valid)
-    portrait_dimensions = tuple(
-        (width, height) for width, height in valid if width / height < 0.9
-    )
+    portrait_dimensions = tuple((width, height) for width, height in valid if width / height < 0.9)
     square = len(valid) - landscape - len(portrait_dimensions)
     if len(portrait_dimensions) > max(landscape, square):
         average_ratio = sum(width / height for width, height in portrait_dimensions) / len(
