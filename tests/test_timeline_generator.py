@@ -40,6 +40,7 @@ def test_video_edit_places_clip_boundaries_on_kicks() -> None:
         Path("two.mp4"),
         Path("one.mp4"),
     ]
+    assert [clip.source_start_seconds for clip in result.clips] == [0.0, 0.0, 2.0]
     assert progress[0] == (5, "Finding kick cut points")
     assert progress[-1] == (100, "Video edit ready · 3 edits")
 
@@ -57,3 +58,37 @@ def test_random_video_edit_is_reproducible_from_seed() -> None:
     second = generate_first_cut(_analysis(), paths, **kwargs)
 
     assert first == second
+
+
+def test_video_edit_never_reuses_a_source_range() -> None:
+    result = generate_first_cut(
+        _analysis(),
+        (Path("one.mp4"),),
+        strategy="Import order",
+        seed=42,
+        progress=lambda *_: None,
+        cancelled=lambda: False,
+    )
+
+    assert [clip.source_start_seconds for clip in result.clips] == [0.0, 2.0, 6.5]
+    assert [
+        clip.timeline_end_seconds - clip.timeline_start_seconds for clip in result.clips
+    ] == [2.0, 4.5, 3.5]
+
+
+def test_video_edit_stops_instead_of_repeating_exhausted_footage() -> None:
+    try:
+        generate_first_cut(
+            _analysis(),
+            (Path("short.mp4"),),
+            strategy="Import order",
+            seed=42,
+            progress=lambda *_: None,
+            cancelled=lambda: False,
+            source_durations={Path("short.mp4"): 5.0},
+        )
+    except ValueError as error:
+        assert "ran out of unused footage" in str(error)
+        assert "will not be repeated" in str(error)
+    else:
+        raise AssertionError("Expected generation to reject reused source footage")

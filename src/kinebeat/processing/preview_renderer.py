@@ -51,19 +51,25 @@ def generate_video_edit_preview(
     height: int = 360,
     frames_per_second: int = 24,
 ) -> VideoEditPreview:
+    source_durations = _probe_video_durations(
+        video_paths,
+        progress=lambda value, detail: progress(round(value * 0.08), detail),
+        cancelled=cancelled,
+    )
     timeline = generate_first_cut(
         analysis,
         video_paths,
         strategy=strategy,
         seed=seed,
-        progress=lambda value, detail: progress(round(value * 0.1), detail),
+        progress=lambda value, detail: progress(8 + round(value * 0.04), detail),
         cancelled=cancelled,
+        source_durations=source_durations,
     )
     effect_cues = build_effect_cues(analysis, effect_mappings, seed=seed)
     preview_path = render_video_preview(
         timeline,
         output_path,
-        progress=lambda value, detail: progress(10 + round(value * 0.9), detail),
+        progress=lambda value, detail: progress(12 + round(value * 0.88), detail),
         cancelled=cancelled,
         width=width,
         height=height,
@@ -78,6 +84,48 @@ def generate_video_edit_preview(
         frames_per_second,
         len(effect_cues),
     )
+
+
+def _probe_video_durations(
+    video_paths: tuple[Path, ...],
+    *,
+    progress: ProgressCallback,
+    cancelled: CancelCheck,
+) -> dict[Path, float]:
+    if not video_paths:
+        raise ValueError("Import at least one video clip before generating a video edit.")
+
+    durations: dict[Path, float] = {}
+    progress(0, "Checking available unused footage")
+    for index, path in enumerate(video_paths):
+        if cancelled():
+            raise PreviewRenderCancelled("Video preview generation was cancelled.")
+        source = path.expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(f"Video clip is missing: {source}")
+        try:
+            with av.open(str(source)) as container:
+                if not container.streams.video:
+                    raise ValueError(f"Video clip does not contain video: {source.name}")
+                stream = container.streams.video[0]
+                if stream.duration is not None and stream.time_base is not None:
+                    duration = float(stream.duration * stream.time_base)
+                elif container.duration is not None:
+                    duration = float(container.duration) / 1_000_000
+                else:
+                    raise ValueError(
+                        f"Kinebeat could not determine the duration of {source.name}."
+                    )
+        except av.error.FFmpegError as error:
+            raise ValueError(f"Kinebeat could not read {source.name}: {error}") from error
+        if duration <= 0:
+            raise ValueError(f"Video clip has no usable duration: {source.name}")
+        durations[path] = duration
+        progress(
+            round((index + 1) * 100 / len(video_paths)),
+            f"Checked footage {index + 1} of {len(video_paths)}",
+        )
+    return durations
 
 
 def render_video_preview(
