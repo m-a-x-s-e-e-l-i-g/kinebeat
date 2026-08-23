@@ -307,7 +307,7 @@ class KinebeatWindow(QMainWindow):
         self._task_worker: TaskWorker | None = None
         self._task_failed_message: str | None = None
         self._thumbnail_pool = QThreadPool(self)
-        self._thumbnail_pool.setMaxThreadCount(2)
+        self._thumbnail_pool.setMaxThreadCount(4)
         self._thumbnail_cache: dict[tuple[Path, int, int], QImage] = {}
         self._media_durations: dict[tuple[Path, int, int], float] = {}
         self._thumbnail_failures: dict[tuple[Path, int, int], str] = {}

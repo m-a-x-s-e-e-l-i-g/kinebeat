@@ -86,6 +86,14 @@ def test_demo_analysis_unlocks_footage_but_not_generation() -> None:
     window.close()
 
 
+def test_media_checks_run_four_clips_concurrently() -> None:
+    _app()
+    window = KinebeatWindow()
+
+    assert window._thumbnail_pool.maxThreadCount() == 4
+    window.close()
+
+
 def test_import_video_button_adds_clips_and_unlocks_generation(tmp_path, monkeypatch) -> None:
     _app()
     first = tmp_path / "first.mp4"

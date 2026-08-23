@@ -44,16 +44,17 @@ def inspect_video_media(
             if not math.isfinite(duration) or duration <= 0:
                 raise ValueError(f"Video clip has no usable duration: {source.name}")
             target_seconds = min(2.0, duration * 0.08)
+            if stream.time_base:
+                container.seek(
+                    round(target_seconds / float(stream.time_base)),
+                    stream=stream,
+                    backward=True,
+                )
             selected: av.VideoFrame | None = None
-            latest: av.VideoFrame | None = None
             for frame in _decode_video_frames(container, stream):
-                latest = frame
-                if selected is None and (
-                    frame.time is None or float(frame.time) + 1e-6 >= target_seconds
-                ):
-                    selected = frame
-            if selected is None:
-                selected = latest
+                selected = frame
+                if frame.time is None or float(frame.time) + 1e-6 >= target_seconds:
+                    break
             if selected is None:
                 raise ValueError(_unreadable_video_message(source))
             return VideoMediaCheck(_cover_frame(selected, width, height), duration)
