@@ -7,6 +7,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QApplication
 
 from kinebeat.app import application_stylesheet, load_application_font
@@ -46,6 +47,11 @@ def main() -> int:
         window._generated_timeline = result
         window.timeline.set_first_cut(result)
         window._update_footage_copy()
+        thumbnail_colors = ("#aa4b2c", "#45654b", "#394f79")
+        for row, color in zip(window._media_rows, thumbnail_colors, strict=True):
+            thumbnail = QImage(72, 45, QImage.Format.Format_RGB888)
+            thumbnail.fill(QColor(color))
+            row.set_thumbnail(thumbnail)
         window.timeline_meta.setText(
             f"{len(result.clips)} EDITS · {len(window._analysis.events)} EVENTS"
         )

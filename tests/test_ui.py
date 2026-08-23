@@ -4,6 +4,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import numpy as np
 from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QMessageBox
@@ -103,6 +104,32 @@ def test_media_library_removes_an_imported_video(tmp_path) -> None:
     assert [row.path for row in window._media_rows] == [second]
     assert window.footage_copy.text() == "1 video clip available"
     assert window.isWindowModified() is True
+    window.close()
+
+
+def test_media_library_loads_video_thumbnails_without_blocking(tmp_path, monkeypatch) -> None:
+    _app()
+    source = (tmp_path / "thumbnail.mp4").resolve()
+    source.touch()
+    monkeypatch.setattr(
+        window_module,
+        "extract_video_thumbnail",
+        lambda _path: np.full((45, 72, 3), (210, 70, 25), dtype=np.uint8),
+    )
+    window = KinebeatWindow()
+    window.load_demo_state()
+    window._video_paths = (source,)
+    window._update_footage_copy()
+
+    for _ in range(30):
+        _app().processEvents()
+        if window._media_rows[0].thumbnail.property("state") == "ready":
+            break
+        QTest.qWait(10)
+
+    row = window._media_rows[0]
+    assert row.thumbnail.property("state") == "ready"
+    assert row.thumbnail.pixmap().isNull() is False
     window.close()
 
 

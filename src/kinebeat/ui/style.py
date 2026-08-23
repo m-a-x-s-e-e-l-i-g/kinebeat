@@ -46,13 +46,22 @@ QFrame#mediaLibraryRow {
 }
 QFrame#mediaLibraryRow:hover { background: #181a18; border-color: #494d48; }
 QFrame#mediaLibraryRow[missing="true"] { border-color: #6b504b; }
-QLabel#mediaIndex {
-    color: #656a64;
-    font-size: 10px;
-    font-weight: 700;
-}
 QLabel#mediaName { color: #dfe2dc; font-size: 11px; font-weight: 600; }
 QLabel#mediaMeta { color: #686d67; font-size: 9px; letter-spacing: 0.8px; }
+QLabel#mediaThumbnail {
+    color: #656a64;
+    background: #090a09;
+    border: 1px solid #30332f;
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+QLabel#mediaThumbnail[state="unavailable"] {
+    color: #735b55;
+    background: #14100f;
+    border-color: #513e39;
+}
+QLabel#mediaThumbnail[state="ready"] { border-color: #3c403b; }
 QLabel#mediaEmptyState {
     color: #666b65;
     font-size: 11px;

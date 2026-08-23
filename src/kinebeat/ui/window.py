@@ -8,17 +8,20 @@ from typing import Any
 
 from PySide6.QtCore import (
     QEasingCurve,
+    QObject,
     QPropertyAnimation,
     QRect,
+    QRunnable,
     QStandardPaths,
     Qt,
     QThread,
+    QThreadPool,
     QTimer,
     QUrl,
     Signal,
     Slot,
 )
-from PySide6.QtGui import QImage, QKeySequence, QPainter, QShortcut
+from PySide6.QtGui import QImage, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoFrame, QVideoSink
 from PySide6.QtWidgets import (
     QApplication,
@@ -57,6 +60,7 @@ from kinebeat.domain import (
 from kinebeat.processing import (
     MusicAnalysisService,
     VideoEditPreview,
+    extract_video_thumbnail,
     generate_video_edit_preview,
     probe_song,
 )
@@ -184,16 +188,18 @@ class MediaLibraryRow(QFrame):
         layout.setContentsMargins(9, 8, 7, 8)
         layout.setSpacing(8)
 
-        index_label = QLabel(f"{index:02d}")
-        index_label.setObjectName("mediaIndex")
-        index_label.setFixedWidth(22)
+        self.thumbnail = QLabel("LOADING")
+        self.thumbnail.setObjectName("mediaThumbnail")
+        self.thumbnail.setProperty("state", "loading")
+        self.thumbnail.setFixedSize(72, 45)
+        self.thumbnail.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         details = QVBoxLayout()
         details.setSpacing(1)
-        name = QLabel(_compact_media_name(path.name))
+        name = QLabel(_compact_media_name(path.name, 18))
         name.setObjectName("mediaName")
         name.setToolTip(path.name)
-        kind = QLabel(f"VIDEO · {path.suffix.removeprefix('.').upper() or 'FILE'}")
+        kind = QLabel(f"{index:02d} · {path.suffix.removeprefix('.').upper() or 'FILE'}")
         kind.setObjectName("mediaMeta")
         details.addWidget(name)
         details.addWidget(kind)
@@ -207,9 +213,52 @@ class MediaLibraryRow(QFrame):
             lambda _checked=False: self.removeRequested.emit(self.path)
         )
 
-        layout.addWidget(index_label)
+        layout.addWidget(self.thumbnail)
         layout.addLayout(details, 1)
         layout.addWidget(self.remove_button)
+
+    def set_thumbnail(self, image: QImage) -> None:
+        self.thumbnail.setText("")
+        self.thumbnail.setPixmap(QPixmap.fromImage(image))
+        self._set_thumbnail_state("ready")
+
+    def set_thumbnail_unavailable(self) -> None:
+        self.thumbnail.setPixmap(QPixmap())
+        self.thumbnail.setText("NO PREVIEW")
+        self._set_thumbnail_state("unavailable")
+
+    def _set_thumbnail_state(self, state: str) -> None:
+        self.thumbnail.setProperty("state", state)
+        self.thumbnail.style().unpolish(self.thumbnail)
+        self.thumbnail.style().polish(self.thumbnail)
+
+
+class MediaThumbnailSignals(QObject):
+    ready = Signal(Path, object)
+    failed = Signal(Path)
+
+
+class MediaThumbnailTask(QRunnable):
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self.path = path
+        self.signals = MediaThumbnailSignals()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            pixels = extract_video_thumbnail(self.path)
+            image = QImage(
+                pixels.data,
+                pixels.shape[1],
+                pixels.shape[0],
+                pixels.strides[0],
+                QImage.Format.Format_RGB888,
+            ).copy()
+        except (OSError, ValueError):
+            self.signals.failed.emit(self.path)
+        else:
+            self.signals.ready.emit(self.path, image)
 
 
 def _compact_media_name(name: str, limit: int = 24) -> str:
@@ -244,6 +293,11 @@ class KinebeatWindow(QMainWindow):
         self._task_thread: QThread | None = None
         self._task_worker: TaskWorker | None = None
         self._task_failed_message: str | None = None
+        self._thumbnail_pool = QThreadPool(self)
+        self._thumbnail_pool.setMaxThreadCount(2)
+        self._thumbnail_cache: dict[tuple[Path, int, int], QImage] = {}
+        self._thumbnail_failures: set[tuple[Path, int, int]] = set()
+        self._thumbnail_tasks: dict[Path, MediaThumbnailTask] = {}
         self._build_ui()
         self._setup_save_feedback()
         self._setup_playback()
@@ -846,7 +900,55 @@ class KinebeatWindow(QMainWindow):
             row.removeRequested.connect(self._remove_video_clip)
             self._media_rows.append(row)
             self.media_library_layout.addWidget(row)
+            self._load_media_thumbnail(row)
         self.media_library_layout.addStretch()
+
+    def _load_media_thumbnail(self, row: MediaLibraryRow) -> None:
+        key = self._thumbnail_key(row.path)
+        image = self._thumbnail_cache.get(key)
+        if image is not None:
+            row.set_thumbnail(image)
+            return
+        if key in self._thumbnail_failures or not row.path.is_file():
+            row.set_thumbnail_unavailable()
+            return
+
+        source = row.path.resolve()
+        if source in self._thumbnail_tasks:
+            return
+        task = MediaThumbnailTask(source)
+        task.signals.ready.connect(self._media_thumbnail_ready)
+        task.signals.failed.connect(self._media_thumbnail_failed)
+        self._thumbnail_tasks[source] = task
+        self._thumbnail_pool.start(task)
+
+    @Slot(Path, object)
+    def _media_thumbnail_ready(self, path: Path, value: object) -> None:
+        self._thumbnail_tasks.pop(path.resolve(), None)
+        if not isinstance(value, QImage):
+            self._media_thumbnail_failed(path)
+            return
+        self._thumbnail_cache[self._thumbnail_key(path)] = value
+        for row in self._media_rows:
+            if row.path.resolve() == path.resolve():
+                row.set_thumbnail(value)
+
+    @Slot(Path)
+    def _media_thumbnail_failed(self, path: Path) -> None:
+        self._thumbnail_tasks.pop(path.resolve(), None)
+        self._thumbnail_failures.add(self._thumbnail_key(path))
+        for row in self._media_rows:
+            if row.path.resolve() == path.resolve():
+                row.set_thumbnail_unavailable()
+
+    @staticmethod
+    def _thumbnail_key(path: Path) -> tuple[Path, int, int]:
+        source = path.resolve()
+        try:
+            status = source.stat()
+        except OSError:
+            return source, 0, 0
+        return source, status.st_mtime_ns, status.st_size
 
     @Slot(Path)
     def _remove_video_clip(self, path: Path) -> None:
