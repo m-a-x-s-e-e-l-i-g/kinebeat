@@ -21,6 +21,7 @@ from kinebeat.processing.video_effects import EffectCue, VideoEffectProcessor, b
 
 ProgressCallback = Callable[[int, str], None]
 CancelCheck = Callable[[], bool]
+MAX_CONSECUTIVE_CORRUPT_PACKETS = 8
 
 
 class PreviewRenderCancelled(RuntimeError):
@@ -107,15 +108,19 @@ def _probe_video_durations(
             with av.open(str(source)) as container:
                 if not container.streams.video:
                     raise ValueError(f"Video clip does not contain video: {source.name}")
+                container.flags |= av.container.Flags.discard_corrupt.value
                 stream = container.streams.video[0]
+                stream.thread_type = "AUTO"
                 if stream.duration is not None and stream.time_base is not None:
                     duration = float(stream.duration * stream.time_base)
                 elif container.duration is not None:
                     duration = float(container.duration) / 1_000_000
                 else:
                     raise ValueError(f"Kinebeat could not determine the duration of {source.name}.")
+                if next(_decode_video_frames(container, stream), None) is None:
+                    raise ValueError(_unreadable_video_message(source))
         except av.error.FFmpegError as error:
-            raise ValueError(f"Kinebeat could not read {source.name}: {error}") from error
+            raise ValueError(_unreadable_video_message(source, error)) from error
         if duration <= 0:
             raise ValueError(f"Video clip has no usable duration: {source.name}")
         durations[path] = duration
@@ -246,6 +251,7 @@ def _read_source_segment(
     with av.open(str(source)) as container:
         if not container.streams.video:
             raise ValueError(f"Video clip does not contain video: {source.name}")
+        container.flags |= av.container.Flags.discard_corrupt.value
         stream = container.streams.video[0]
         stream.thread_type = "AUTO"
         if source_start_seconds > 0 and stream.time_base:
@@ -255,31 +261,62 @@ def _read_source_segment(
         decoded_index = 0
         target_index = 0
         last_image: np.ndarray | None = None
-        for frame in container.decode(stream):
-            if cancelled():
-                raise PreviewRenderCancelled("Video preview generation was cancelled.")
-            frame_time = (
-                float(frame.time) if frame.time is not None else decoded_index / fallback_rate
-            )
-            decoded_index += 1
-            if frame_time + 1e-6 < source_start_seconds:
-                continue
-            relative_time = frame_time - source_start_seconds
-            image = _fit_frame(frame, width, height)
-            if last_image is None:
+        try:
+            for frame in _decode_video_frames(container, stream):
+                if cancelled():
+                    raise PreviewRenderCancelled("Video preview generation was cancelled.")
+                frame_time = (
+                    float(frame.time) if frame.time is not None else decoded_index / fallback_rate
+                )
+                decoded_index += 1
+                if frame_time + 1e-6 < source_start_seconds:
+                    continue
+                relative_time = frame_time - source_start_seconds
+                image = _fit_frame(frame, width, height)
+                if last_image is None:
+                    last_image = image
+                while (
+                    target_index < frame_count and target_index / frames_per_second < relative_time
+                ):
+                    yield last_image
+                    target_index += 1
                 last_image = image
-            while target_index < frame_count and target_index / frames_per_second < relative_time:
-                yield last_image
-                target_index += 1
-            last_image = image
-            if target_index >= frame_count:
-                break
+                if target_index >= frame_count:
+                    break
+        except av.error.FFmpegError as error:
+            raise ValueError(_unreadable_video_message(source, error)) from error
 
     if last_image is None:
-        raise ValueError(f"Kinebeat could not decode frames from {source.name}.")
+        raise ValueError(_unreadable_video_message(source))
     while target_index < frame_count:
         yield last_image
         target_index += 1
+
+
+def _decode_video_frames(
+    container: av.container.InputContainer,
+    stream: av.video.stream.VideoStream,
+) -> Iterator[av.VideoFrame]:
+    consecutive_corrupt_packets = 0
+    for packet in container.demux(stream):
+        try:
+            frames = packet.decode()
+        except av.InvalidDataError:
+            consecutive_corrupt_packets += 1
+            if consecutive_corrupt_packets > MAX_CONSECUTIVE_CORRUPT_PACKETS:
+                raise
+            continue
+        if frames:
+            consecutive_corrupt_packets = 0
+        yield from frames
+
+
+def _unreadable_video_message(source: Path, error: av.FFmpegError | None = None) -> str:
+    detail = f" Decoder detail: {error.strerror}." if error and error.strerror else ""
+    return (
+        f"Kinebeat could not decode video from {source.name}. Remove it from the Media library "
+        f"or re-encode it as an H.264 MP4, then try again.{detail}"
+    )
 
 
 def _fit_frame(frame: av.VideoFrame, width: int, height: int) -> np.ndarray:

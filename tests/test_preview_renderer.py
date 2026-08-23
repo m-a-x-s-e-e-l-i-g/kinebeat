@@ -3,6 +3,7 @@ from pathlib import Path
 
 import av
 import numpy as np
+import pytest
 
 from kinebeat.domain import (
     EffectAction,
@@ -15,6 +16,7 @@ from kinebeat.domain import (
     TimelineClip,
 )
 from kinebeat.processing import generate_video_edit_preview, render_video_preview
+from kinebeat.processing.preview_renderer import _decode_video_frames
 
 
 def _write_color_video(path: Path, color: tuple[int, int, int]) -> None:
@@ -189,3 +191,54 @@ def test_generated_preview_advances_through_unused_source_ranges(tmp_path: Path)
     assert float(frames[2][..., 0].mean()) > float(frames[2][..., 1].mean()) * 4
     assert float(frames[12][..., 1].mean()) > float(frames[12][..., 0].mean()) * 4
     assert float(frames[22][..., 2].mean()) > float(frames[22][..., 0].mean()) * 4
+
+
+def test_video_packet_decoder_skips_isolated_invalid_data() -> None:
+    class FakePacket:
+        def __init__(self, frames=None, error=None):
+            self.frames = frames or []
+            self.error = error
+
+        def decode(self):
+            if self.error:
+                raise self.error
+            return self.frames
+
+    class FakeContainer:
+        def demux(self, _stream):
+            return iter(
+                (
+                    FakePacket(error=av.InvalidDataError(1094995529, "Invalid data")),
+                    FakePacket(frames=["recovered-frame"]),
+                )
+            )
+
+    assert list(_decode_video_frames(FakeContainer(), object())) == ["recovered-frame"]
+
+
+def test_video_edit_preview_names_an_unreadable_library_clip(tmp_path: Path) -> None:
+    source = tmp_path / "broken-camera-clip.mp4"
+    source.write_bytes(b"this is not video data")
+    output = tmp_path / "preview.mp4"
+    song = SongMetadata(tmp_path / "song.wav", 1.0, 48000, 2, "pcm_s16le")
+    analysis = MusicAnalysis(song, (), (), "test")
+
+    with pytest.raises(ValueError) as raised:
+        generate_video_edit_preview(
+            analysis,
+            (source,),
+            strategy="Import order",
+            seed=9,
+            output_path=output,
+            effect_mappings=(),
+            progress=lambda *_: None,
+            cancelled=lambda: False,
+            width=160,
+            height=90,
+            frames_per_second=10,
+        )
+
+    message = str(raised.value)
+    assert "broken-camera-clip.mp4" in message
+    assert "Remove it from the Media library" in message
+    assert "avcodec_send_packet" not in message
