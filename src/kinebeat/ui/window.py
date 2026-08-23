@@ -79,6 +79,11 @@ EFFECT_OPTIONS = (
     (EffectAction.ADD_AMBIANCE, "Add more ambiance"),
     (EffectAction.LIGHT_EFFECT, "Light effect · 0.2 s"),
     (EffectAction.TIME_BEND, "Time bend"),
+    (EffectAction.GLITCH, "Glitch"),
+    (EffectAction.VHS, "VHS"),
+    (EffectAction.SILHOUETTE_STRETCH, "Silhouette edge stretch"),
+    (EffectAction.VIDEO_VOLUME, "Video volume · XYT"),
+    (EffectAction.DATAMOSH, "Datamosh"),
     (EffectAction.NO_ACTION, "No action"),
 )
 
@@ -380,7 +385,7 @@ class KinebeatWindow(QMainWindow):
         eyebrow.setObjectName("eyebrow")
         title = QLabel("Video edit rules")
         title.setObjectName("sectionTitle")
-        helper = QLabel("Mappings activate after music analysis.")
+        helper = QLabel("Each detected instrument can cut or trigger a rendered effect.")
         helper.setObjectName("bodyMuted")
         helper.setWordWrap(True)
         strategy_label = QLabel("FOOTAGE SELECTION")
@@ -754,6 +759,9 @@ class KinebeatWindow(QMainWindow):
     def _mapping_changed(self) -> None:
         if not self._loading_project and self._analysis:
             self._set_dirty(True)
+            if self._preview_path:
+                self.task_title.setText("EFFECT RULES CHANGED")
+                self.task_detail.setText("Regenerate the video edit to render the new effects")
 
     @Slot()
     def _generate_video_edit(self) -> None:
@@ -762,6 +770,10 @@ class KinebeatWindow(QMainWindow):
         analysis = self._analysis
         video_paths = self._video_paths
         strategy = self.strategy_combo.currentText()
+        effect_mappings = tuple(
+            InstrumentMapping(instrument, EffectAction(combo.currentData()))
+            for instrument, combo in self.mapping_combos.items()
+        )
         seed = secrets.randbits(31)
         cache_location = QStandardPaths.writableLocation(
             QStandardPaths.StandardLocation.CacheLocation
@@ -784,6 +796,7 @@ class KinebeatWindow(QMainWindow):
                 strategy=strategy,
                 seed=seed,
                 output_path=output_path,
+                effect_mappings=effect_mappings,
                 **kwargs,
             ),
             on_success=self._video_edit_ready,
@@ -1043,7 +1056,7 @@ class KinebeatWindow(QMainWindow):
         self._set_video_preview_source(result.path, self.timeline.position_seconds)
         self.task_title.setText("VIDEO EDIT READY")
         self.task_detail.setText(
-            f"{len(result.timeline.clips)} beat-synced edits · "
+            f"{len(result.timeline.clips)} edits · {result.effect_count} effect hits · "
             f"{result.width} × {result.height} preview"
         )
         self.task_progress.setValue(100)

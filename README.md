@@ -30,6 +30,12 @@ are preserved while media remains external to the small project document; proxy 
 is rebuilt on demand after loading a project. See
 [the confirmed design brief](docs/DESIGN_BRIEF.md).
 
+Instrument mappings render into the proxy: deterministic random effects, glitch, VHS,
+datamosh, time bend, light/intensity/ambiance treatments, silhouette edge stretch based
+on [Chronophoto issue #25](https://github.com/m-a-x-s-e-e-l-i-g/chronophoto/issues/25),
+and rolling XYT video-volume slices based on
+[Chronophoto issue #26](https://github.com/m-a-x-s-e-e-l-i-g/chronophoto/issues/26).
+
 ## Development
 
 ```powershell

@@ -10,8 +10,14 @@ from pathlib import Path
 import av
 import numpy as np
 
-from kinebeat.domain import GeneratedTimeline, MusicAnalysis
+from kinebeat.domain import (
+    DEFAULT_EFFECT_MAPPINGS,
+    GeneratedTimeline,
+    InstrumentMapping,
+    MusicAnalysis,
+)
 from kinebeat.processing.timeline_generator import generate_first_cut
+from kinebeat.processing.video_effects import EffectCue, VideoEffectProcessor, build_effect_cues
 
 ProgressCallback = Callable[[int, str], None]
 CancelCheck = Callable[[], bool]
@@ -28,6 +34,7 @@ class VideoEditPreview:
     width: int
     height: int
     frames_per_second: int
+    effect_count: int = 0
 
 
 def generate_video_edit_preview(
@@ -39,6 +46,7 @@ def generate_video_edit_preview(
     output_path: Path,
     progress: ProgressCallback,
     cancelled: CancelCheck,
+    effect_mappings: tuple[InstrumentMapping, ...] = DEFAULT_EFFECT_MAPPINGS,
     width: int = 640,
     height: int = 360,
     frames_per_second: int = 24,
@@ -51,6 +59,7 @@ def generate_video_edit_preview(
         progress=lambda value, detail: progress(round(value * 0.1), detail),
         cancelled=cancelled,
     )
+    effect_cues = build_effect_cues(analysis, effect_mappings, seed=seed)
     preview_path = render_video_preview(
         timeline,
         output_path,
@@ -59,8 +68,16 @@ def generate_video_edit_preview(
         width=width,
         height=height,
         frames_per_second=frames_per_second,
+        effect_cues=effect_cues,
     )
-    return VideoEditPreview(timeline, preview_path, width, height, frames_per_second)
+    return VideoEditPreview(
+        timeline,
+        preview_path,
+        width,
+        height,
+        frames_per_second,
+        len(effect_cues),
+    )
 
 
 def render_video_preview(
@@ -72,6 +89,7 @@ def render_video_preview(
     width: int = 640,
     height: int = 360,
     frames_per_second: int = 24,
+    effect_cues: tuple[EffectCue, ...] = (),
 ) -> Path:
     if not timeline.clips:
         raise ValueError("The generated edit does not contain any clips.")
@@ -87,7 +105,11 @@ def render_video_preview(
     )
     written_frames = 0
     last_progress = -1
-    progress(0, "Preparing video preview")
+    effect_processor = VideoEffectProcessor(
+        effect_cues,
+        frames_per_second=frames_per_second,
+    )
+    progress(0, f"Preparing video preview · {len(effect_cues)} effect hits")
 
     try:
         with av.open(str(temporary), mode="w") as output:
@@ -110,7 +132,11 @@ def render_video_preview(
                 for rgb_frame in source_frames:
                     if cancelled():
                         raise PreviewRenderCancelled("Video preview generation was cancelled.")
-                    frame = av.VideoFrame.from_ndarray(rgb_frame, format="rgb24")
+                    effected_frame = effect_processor.process(
+                        rgb_frame,
+                        written_frames / frames_per_second,
+                    )
+                    frame = av.VideoFrame.from_ndarray(effected_frame, format="rgb24")
                     frame.pts = written_frames
                     frame.time_base = Fraction(1, frames_per_second)
                     for packet in stream.encode(frame):

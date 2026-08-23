@@ -40,6 +40,8 @@ def test_project_round_trip_preserves_analysis_and_media_paths(tmp_path: Path) -
     mappings = (
         InstrumentMapping(EventKind.KICK, EffectAction.RANDOM_EFFECT),
         InstrumentMapping(EventKind.BASS, EffectAction.ADD_INTENSITY),
+        InstrumentMapping(EventKind.SNARE, EffectAction.VHS),
+        InstrumentMapping(EventKind.VOCAL, EffectAction.VIDEO_VOLUME),
     )
     generated_timeline = GeneratedTimeline(
         (TimelineClip(video_path, 0.0, 1.25), TimelineClip(video_path, 1.25, 63.5, locked=True)),

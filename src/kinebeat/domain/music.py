@@ -21,6 +21,11 @@ class EffectAction(StrEnum):
     ADD_AMBIANCE = "add_ambiance"
     LIGHT_EFFECT = "light_effect"
     TIME_BEND = "time_bend"
+    GLITCH = "glitch"
+    VHS = "vhs"
+    SILHOUETTE_STRETCH = "silhouette_stretch"
+    VIDEO_VOLUME = "video_volume"
+    DATAMOSH = "datamosh"
     NO_ACTION = "no_action"
 
 

@@ -44,6 +44,14 @@ def test_demo_analysis_unlocks_footage_but_not_generation() -> None:
     assert window.mapping_combos[EventKind.SNARE].currentData() == EffectAction.RANDOM_EFFECT.value
     assert window.mapping_combos[EventKind.BASS].currentData() == EffectAction.ADD_INTENSITY.value
     assert window.mapping_combos[EventKind.VOCAL].currentData() == EffectAction.ADD_AMBIANCE.value
+    for action in (
+        EffectAction.GLITCH,
+        EffectAction.VHS,
+        EffectAction.SILHOUETTE_STRETCH,
+        EffectAction.VIDEO_VOLUME,
+        EffectAction.DATAMOSH,
+    ):
+        assert window.mapping_combos[EventKind.SNARE].findData(action.value) >= 0
     window.close()
 
 
@@ -77,7 +85,18 @@ def test_generate_video_edit_reports_progress_and_draws_edits(tmp_path, monkeypa
     window._sync_state()
     progress: list[tuple[int, str]] = []
 
-    def fake_preview(analysis, video_paths, *, strategy, seed, output_path, progress, cancelled):
+    def fake_preview(
+        analysis,
+        video_paths,
+        *,
+        strategy,
+        seed,
+        output_path,
+        progress,
+        cancelled,
+        effect_mappings,
+    ):
+        del effect_mappings
         timeline = generate_first_cut(
             analysis,
             video_paths,
@@ -112,7 +131,7 @@ def test_generate_video_edit_reports_progress_and_draws_edits(tmp_path, monkeypa
     assert window.task_title.text() == "VIDEO EDIT READY"
     assert window.task_progress.value() == 100
     assert window.generate_button.text() == "Regenerate video edit"
-    assert "beat-synced edits" in window.task_detail.text()
+    assert "effect hits" in window.task_detail.text()
     assert progress[0] == (5, "Finding kick cut points")
     assert progress[-1][0] == 100
     assert window._preview_path is not None
@@ -126,7 +145,18 @@ def test_generate_button_runs_background_video_edit(tmp_path, monkeypatch) -> No
     window._video_paths = (tmp_path / "one.mp4", tmp_path / "two.mp4")
     window._sync_state()
 
-    def fake_preview(analysis, video_paths, *, strategy, seed, output_path, progress, cancelled):
+    def fake_preview(
+        analysis,
+        video_paths,
+        *,
+        strategy,
+        seed,
+        output_path,
+        progress,
+        cancelled,
+        effect_mappings,
+    ):
+        del effect_mappings
         timeline = generate_first_cut(
             analysis,
             video_paths,
