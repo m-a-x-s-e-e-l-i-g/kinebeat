@@ -8,7 +8,14 @@ from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QMessageBox
 
-from kinebeat.domain import EffectAction, EventKind, InstrumentMapping, ProjectState
+from kinebeat.domain import (
+    EffectAction,
+    EventKind,
+    GeneratedTimeline,
+    InstrumentMapping,
+    ProjectState,
+    TimelineClip,
+)
 from kinebeat.processing import VideoEditPreview, generate_first_cut
 from kinebeat.ui import window as window_module
 from kinebeat.ui.window import KinebeatWindow
@@ -73,7 +80,76 @@ def test_import_video_button_adds_clips_and_unlocks_generation(tmp_path, monkeyp
 
     assert window._video_paths == (first.resolve(), second.resolve())
     assert window.generate_button.isEnabled() is True
-    assert "2 clips imported" in window.footage_copy.text()
+    assert window.footage_copy.text() == "2 video clips available"
+    assert [row.path for row in window._media_rows] == [first.resolve(), second.resolve()]
+    window.close()
+
+
+def test_media_library_removes_an_imported_video(tmp_path) -> None:
+    _app()
+    first = (tmp_path / "first.mp4").resolve()
+    second = (tmp_path / "second.mov").resolve()
+    first.touch()
+    second.touch()
+    window = KinebeatWindow()
+    window.load_demo_state()
+    window._video_paths = (first, second)
+    window._update_footage_copy()
+    window._sync_state()
+
+    window._media_rows[0].remove_button.click()
+
+    assert window._video_paths == (second,)
+    assert [row.path for row in window._media_rows] == [second]
+    assert window.footage_copy.text() == "1 video clip available"
+    assert window.isWindowModified() is True
+    window.close()
+
+
+def test_removing_used_video_invalidates_generated_preview(tmp_path, monkeypatch) -> None:
+    _app()
+    used = (tmp_path / "used.mp4").resolve()
+    remaining = (tmp_path / "remaining.mp4").resolve()
+    used.touch()
+    remaining.touch()
+    window = KinebeatWindow()
+    monkeypatch.setattr(window, "_set_video_preview_source", lambda *_: None)
+    window.load_demo_state()
+    timeline = GeneratedTimeline((TimelineClip(used, 0.0, 1.0),), seed=4)
+    window._video_paths = (used, remaining)
+    window._generated_timeline = timeline
+    window.timeline.set_first_cut(timeline)
+    window._update_footage_copy()
+
+    window._media_rows[0].remove_button.click()
+
+    assert window._video_paths == (remaining,)
+    assert window._generated_timeline is None
+    assert window.timeline._first_cut is None
+    assert window.generate_button.isEnabled() is True
+    assert window.task_title.text() == "VIDEO EDIT NEEDS REBUILDING"
+    window.close()
+
+
+def test_removing_final_used_video_returns_to_library_empty_state(tmp_path, monkeypatch) -> None:
+    _app()
+    used = (tmp_path / "only.mp4").resolve()
+    used.touch()
+    window = KinebeatWindow()
+    monkeypatch.setattr(window, "_set_video_preview_source", lambda *_: None)
+    window.load_demo_state()
+    timeline = GeneratedTimeline((TimelineClip(used, 0.0, 1.0),), seed=5)
+    window._video_paths = (used,)
+    window._generated_timeline = timeline
+    window.timeline.set_first_cut(timeline)
+    window._update_footage_copy()
+
+    window._media_rows[0].remove_button.click()
+
+    assert window._video_paths == ()
+    assert window.generate_button.isEnabled() is False
+    assert window.task_title.text() == "MEDIA LIBRARY EMPTY"
+    assert window.preview_title.text() == "Add footage to\nrebuild the edit."
     window.close()
 
 

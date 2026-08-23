@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStackedWidget,
     QVBoxLayout,
@@ -169,6 +170,56 @@ class VideoPreviewCanvas(QWidget):
         painter.drawImage(target, self._image)
 
 
+class MediaLibraryRow(QFrame):
+    removeRequested = Signal(Path)
+
+    def __init__(self, path: Path, index: int) -> None:
+        super().__init__()
+        self.path = path
+        self.setObjectName("mediaLibraryRow")
+        self.setProperty("missing", not path.is_file())
+        self.setToolTip(str(path))
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(9, 8, 7, 8)
+        layout.setSpacing(8)
+
+        index_label = QLabel(f"{index:02d}")
+        index_label.setObjectName("mediaIndex")
+        index_label.setFixedWidth(22)
+
+        details = QVBoxLayout()
+        details.setSpacing(1)
+        name = QLabel(_compact_media_name(path.name))
+        name.setObjectName("mediaName")
+        name.setToolTip(path.name)
+        kind = QLabel(f"VIDEO · {path.suffix.removeprefix('.').upper() or 'FILE'}")
+        kind.setObjectName("mediaMeta")
+        details.addWidget(name)
+        details.addWidget(kind)
+
+        self.remove_button = QPushButton("REMOVE")
+        self.remove_button.setObjectName("mediaRemoveButton")
+        self.remove_button.setAccessibleName(f"Remove {path.name}")
+        self.remove_button.setToolTip(f"Remove {path.name} from this project")
+        self.remove_button.setFixedWidth(58)
+        self.remove_button.clicked.connect(
+            lambda _checked=False: self.removeRequested.emit(self.path)
+        )
+
+        layout.addWidget(index_label)
+        layout.addLayout(details, 1)
+        layout.addWidget(self.remove_button)
+
+
+def _compact_media_name(name: str, limit: int = 24) -> str:
+    if len(name) <= limit:
+        return name
+    suffix = Path(name).suffix
+    stem_limit = max(6, limit - len(suffix) - 1)
+    return f"{Path(name).stem[:stem_limit]}…{suffix}"
+
+
 class KinebeatWindow(QMainWindow):
     def __init__(self, *, animations_enabled: bool | None = None) -> None:
         super().__init__()
@@ -283,18 +334,32 @@ class KinebeatWindow(QMainWindow):
         footage_layout = QVBoxLayout(footage_section)
         footage_layout.setContentsMargins(0, 0, 0, 18)
         footage_layout.setSpacing(10)
-        footage_layout.addLayout(self._step_heading("02", "Footage"))
-        self.footage_copy = QLabel("Import clips after the musical structure is ready.")
+        footage_layout.addLayout(self._step_heading("02", "Media library"))
+        self.footage_copy = QLabel("No video clips yet.")
         self.footage_copy.setObjectName("bodyMuted")
         self.footage_copy.setWordWrap(True)
         self.footage_button = QPushButton("Import video clips")
         self.footage_button.setObjectName("secondaryButton")
         self.footage_button.clicked.connect(self._choose_video_clips)
+        self.media_library_scroll = QScrollArea()
+        self.media_library_scroll.setObjectName("mediaLibraryScroll")
+        self.media_library_scroll.setWidgetResizable(True)
+        self.media_library_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.media_library_content = QWidget()
+        self.media_library_content.setObjectName("mediaLibraryContent")
+        self.media_library_layout = QVBoxLayout(self.media_library_content)
+        self.media_library_layout.setContentsMargins(0, 0, 0, 0)
+        self.media_library_layout.setSpacing(5)
+        self.media_library_scroll.setWidget(self.media_library_content)
+        self._media_rows: list[MediaLibraryRow] = []
         footage_layout.addWidget(self.footage_copy)
         footage_layout.addWidget(self.footage_button)
+        footage_layout.addWidget(self.media_library_scroll, 1)
         layout.addWidget(music_section)
-        layout.addWidget(footage_section)
-        layout.addStretch()
+        layout.addWidget(footage_section, 1)
+        self._refresh_media_library()
         return rail
 
     def _step_heading(self, number: str, title: str) -> QHBoxLayout:
@@ -718,37 +783,120 @@ class KinebeatWindow(QMainWindow):
             return
         existing = {path.resolve() for path in self._video_paths}
         imported = list(self._video_paths)
+        added_count = 0
         for value in paths:
             path = Path(value).resolve()
             if path not in existing:
                 existing.add(path)
                 imported.append(path)
+                added_count += 1
+        if not added_count:
+            return
         self._video_paths = tuple(imported)
         self._update_footage_copy()
-        self.preview_stack.setCurrentIndex(0)
-        self.preview_eyebrow.setText("FOOTAGE READY")
-        self.preview_title.setText("Ready to build\nthe video edit.")
-        self.preview_body.setText(
-            f"{len(self._video_paths)} clips will be selected using "
-            f"{self.strategy_combo.currentText().lower()}."
-        )
-        self.task_title.setText("FOOTAGE READY")
-        self.task_detail.setText(f"{len(self._video_paths)} video clips imported")
+        if self._generated_timeline:
+            self.task_title.setText("MEDIA LIBRARY UPDATED")
+            self.task_detail.setText(
+                f"Added {added_count} video {'clip' if added_count == 1 else 'clips'} · "
+                "regenerate to use new footage"
+            )
+        else:
+            self.preview_stack.setCurrentIndex(0)
+            self.preview_eyebrow.setText("FOOTAGE READY")
+            self.preview_title.setText("Ready to build\nthe video edit.")
+            self.preview_body.setText(
+                f"{len(self._video_paths)} clips will be selected using "
+                f"{self.strategy_combo.currentText().lower()}."
+            )
+            self.task_title.setText("FOOTAGE READY")
+            self.task_detail.setText(f"{len(self._video_paths)} video clips imported")
         self._set_dirty(True)
         self._sync_state()
 
     def _update_footage_copy(self) -> None:
         count = len(self._video_paths)
         if not count:
-            self.footage_copy.setText("Import clips after the musical structure is ready.")
+            self.footage_copy.setText("No video clips yet.")
             self.footage_button.setText("Import video clips")
+            self._refresh_media_library()
             return
         noun = "clip" if count == 1 else "clips"
-        names = ", ".join(path.name for path in self._video_paths[:3])
-        if count > 3:
-            names += f" +{count - 3} more"
-        self.footage_copy.setText(f"{count} {noun} imported\n{names}")
+        self.footage_copy.setText(f"{count} video {noun} available")
         self.footage_button.setText("Add video clips")
+        self._refresh_media_library()
+
+    def _refresh_media_library(self) -> None:
+        while self.media_library_layout.count():
+            item = self.media_library_layout.takeAt(0)
+            if widget := item.widget():
+                widget.deleteLater()
+        self._media_rows = []
+
+        if not self._video_paths:
+            empty = QLabel("Import footage to fill your first cut.")
+            empty.setObjectName("mediaEmptyState")
+            empty.setWordWrap(True)
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.media_library_layout.addWidget(empty)
+            self.media_library_layout.addStretch()
+            return
+
+        for index, path in enumerate(self._video_paths, start=1):
+            row = MediaLibraryRow(path, index)
+            row.removeRequested.connect(self._remove_video_clip)
+            self._media_rows.append(row)
+            self.media_library_layout.addWidget(row)
+        self.media_library_layout.addStretch()
+
+    @Slot(Path)
+    def _remove_video_clip(self, path: Path) -> None:
+        target = path.resolve()
+        remaining = tuple(video for video in self._video_paths if video.resolve() != target)
+        if len(remaining) == len(self._video_paths):
+            return
+
+        removed_from_edit = bool(
+            self._generated_timeline
+            and any(clip.source_path.resolve() == target for clip in self._generated_timeline.clips)
+        )
+        self._video_paths = remaining
+        if removed_from_edit:
+            self.media_player.pause()
+            self.video_player.pause()
+            self._generated_timeline = None
+            self.timeline.set_first_cut(None)
+            self._set_video_preview_source(None)
+            if remaining:
+                self.preview_eyebrow.setText("MEDIA LIBRARY CHANGED")
+                self.preview_title.setText("Ready to rebuild\nthe video edit.")
+                self.preview_body.setText(
+                    f"{path.name} was removed from the current edit. Generate again to create "
+                    "a preview using the remaining footage."
+                )
+                self.task_title.setText("VIDEO EDIT NEEDS REBUILDING")
+                self.task_detail.setText(f"Removed {path.name} from the generated timeline")
+            else:
+                self.preview_eyebrow.setText("MEDIA LIBRARY EMPTY")
+                self.preview_title.setText("Add footage to\nrebuild the edit.")
+                self.preview_body.setText(
+                    f"{path.name} was the final video clip. Import footage to generate a new "
+                    "playable preview."
+                )
+                self.task_title.setText("MEDIA LIBRARY EMPTY")
+                self.task_detail.setText("Import video clips to continue")
+            self.task_progress.setValue(0)
+        else:
+            self.task_title.setText("MEDIA LIBRARY UPDATED")
+            self.task_detail.setText(f"Removed {path.name}")
+            if not remaining:
+                self.preview_stack.setCurrentIndex(0)
+                self.preview_eyebrow.setText("MEDIA LIBRARY EMPTY")
+                self.preview_title.setText("Now bring in\nthe footage.")
+                self.preview_body.setText("Import video clips to build the first playable edit.")
+
+        self._update_footage_copy()
+        self._set_dirty(True)
+        self._sync_state()
 
     @Slot(str)
     def _strategy_changed(self, _strategy: str) -> None:
@@ -1115,6 +1263,8 @@ class KinebeatWindow(QMainWindow):
         self.choose_music_button.setDisabled(busy)
         self.analyse_button.setEnabled(self._song is not None and not busy)
         self.footage_button.setEnabled(self._analysis is not None and not busy)
+        for row in self._media_rows:
+            row.remove_button.setEnabled(not busy)
         self.strategy_combo.setEnabled(self._analysis is not None and not busy)
         for combo in self.mapping_combos.values():
             combo.setEnabled(self._analysis is not None and not busy)

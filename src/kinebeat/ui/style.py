@@ -35,6 +35,45 @@ QFrame#inspector {
     border-left: 1px solid #30332f;
 }
 QFrame#stepSection { border-bottom: 1px solid #292c29; }
+QScrollArea#mediaLibraryScroll, QWidget#mediaLibraryContent {
+    background: transparent;
+    border: none;
+}
+QFrame#mediaLibraryRow {
+    background: #141614;
+    border: 1px solid #2d302d;
+    border-radius: 2px;
+}
+QFrame#mediaLibraryRow:hover { background: #181a18; border-color: #494d48; }
+QFrame#mediaLibraryRow[missing="true"] { border-color: #6b504b; }
+QLabel#mediaIndex {
+    color: #656a64;
+    font-size: 10px;
+    font-weight: 700;
+}
+QLabel#mediaName { color: #dfe2dc; font-size: 11px; font-weight: 600; }
+QLabel#mediaMeta { color: #686d67; font-size: 9px; letter-spacing: 0.8px; }
+QLabel#mediaEmptyState {
+    color: #666b65;
+    font-size: 11px;
+    padding: 22px 12px;
+}
+QPushButton#mediaRemoveButton {
+    min-height: 26px;
+    max-height: 26px;
+    color: #777c76;
+    background: transparent;
+    border: 1px solid transparent;
+    padding: 0 5px;
+    font-size: 9px;
+    letter-spacing: 0.5px;
+}
+QPushButton#mediaRemoveButton:hover {
+    color: #eee3df;
+    background: #29201e;
+    border-color: #6b504b;
+}
+QPushButton#mediaRemoveButton:disabled { color: #454944; background: transparent; }
 QLabel#stepNumber {
     color: #5f645f;
     font-family: "__APP_FONT__";

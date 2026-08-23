@@ -30,7 +30,11 @@ def main() -> int:
     if args.state in ("analysed", "generated", "saved"):
         window.load_demo_state()
     if args.state == "generated":
-        window._video_paths = (Path("city-wide.mp4"), Path("close-motion.mp4"))
+        window._video_paths = (
+            Path("city-wide-establishing-shot.mp4"),
+            Path("close-motion.mp4"),
+            Path("night-drive-reflections-and-rain.mov"),
+        )
         result = generate_first_cut(
             window._analysis,
             window._video_paths,
@@ -39,7 +43,12 @@ def main() -> int:
             progress=lambda *_: None,
             cancelled=lambda: False,
         )
-        window._first_cut_ready(result)
+        window._generated_timeline = result
+        window.timeline.set_first_cut(result)
+        window._update_footage_copy()
+        window.timeline_meta.setText(
+            f"{len(result.clips)} EDITS · {len(window._analysis.events)} EVENTS"
+        )
         window._sync_state()
     if args.state == "saved":
         window._show_save_feedback()
